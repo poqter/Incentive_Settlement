@@ -1005,15 +1005,15 @@ def render_app():
         with c1:
             with st.container(border=True):
                 st.markdown('<div class="download-card-head"><div class="download-card-title">📘 통합 정산서 PDF</div><div class="download-card-desc">전체 지급 요약과 모든 개인 정산서를<br>하나의 PDF로 내려받습니다.</div></div>', unsafe_allow_html=True)
-                st.download_button("📥 통합 PDF 다운로드", export_pdf(result), file_name=f"화랑사업부_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf", mime="application/pdf", use_container_width=True)
+                st.download_button("📥 통합 PDF 다운로드", export_pdf(result), file_name=f"드림지점_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf", mime="application/pdf", use_container_width=True)
         with c2:
             with st.container(border=True):
                 st.markdown('<div class="download-card-head"><div class="download-card-title">📦 설계사별 PDF ZIP</div><div class="download-card-desc">내역이 있는 설계사의 정산서를<br>개별 PDF로 묶어 내려받습니다.</div></div>', unsafe_allow_html=True)
-                st.download_button("📥 개별 PDF ZIP 다운로드", export_individual_pdfs_zip(result), file_name=f"화랑사업부_설계사별_개인시책정산서_{period_file+'지급' if period_file else ''}.zip", mime="application/zip", use_container_width=True)
+                st.download_button("📥 개별 PDF ZIP 다운로드", export_individual_pdfs_zip(result), file_name=f"드림지점_설계사별_개인시책정산서_{period_file+'지급' if period_file else ''}.zip", mime="application/zip", use_container_width=True)
         with c3:
             with st.container(border=True):
                 st.markdown('<div class="download-card-head"><div class="download-card-title">📊 지급 요약 Excel</div><div class="download-card-desc">전체 요약과 계약 상세내역,<br>확인이 필요한 검증 결과를 포함합니다.</div></div>', unsafe_allow_html=True)
-                st.download_button("📥 요약 Excel 다운로드", export_excel(result), file_name=f"화랑사업부_개인시책지급요약_{period_file+'지급' if period_file else ''}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                st.download_button("📥 요약 Excel 다운로드", export_excel(result), file_name=f"드림지점_개인시책지급요약_{period_file+'지급' if period_file else ''}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     else:
         st.markdown(f"### {selected} 개인 정산")
         if not result.has_activity(selected):
