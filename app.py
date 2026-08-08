@@ -1460,12 +1460,21 @@ def render_app():
             col.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>', unsafe_allow_html=True)
         st.markdown("### 전체 요약")
         sort = st.selectbox("정렬", ["이름 가나다순", "총 시책 높은 순", "총 시책 낮은 순"], label_visibility="collapsed")
+        active_df = df[df["이름"].map(result.has_activity)].copy()
+        inactive_df = df[~df["이름"].map(result.has_activity)].copy()
         if sort == "이름 가나다순":
-            df = df.sort_values("이름", ascending=True, kind="stable")
+            active_df = active_df.sort_values("이름", ascending=True, kind="stable")
         else:
             mapping = {"총 시책 높은 순":("총 시책",False),"총 시책 낮은 순":("총 시책",True)}
-            col, asc = mapping[sort]; df = df.sort_values(col, ascending=asc, kind="stable")
-        render_centered_table(st, display_dataframe(df), min_width=1220, max_height=680)
+            col, asc = mapping[sort]
+            active_df = active_df.sort_values(col, ascending=asc, kind="stable")
+        inactive_df = inactive_df.sort_values("이름", ascending=True, kind="stable")
+        if not active_df.empty:
+            with st.expander(f"정산 내역이 있는 설계사 · {len(active_df)}명", expanded=True):
+                render_centered_table(st, display_dataframe(active_df), min_width=1220, max_height=680)
+        if not inactive_df.empty:
+            with st.expander(f"정산 내역이 없는 설계사 · {len(inactive_df)}명", expanded=False):
+                render_centered_table(st, display_dataframe(inactive_df), min_width=1220, max_height=680)
         period_file = re.sub(r"\s+", "", result.payment_month) if result.payment_month else ""
         st.markdown("### 결과 다운로드")
         c1, c2, c3 = st.columns(3)
