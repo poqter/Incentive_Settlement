@@ -445,7 +445,7 @@ def summary_dataframe(result: AnalysisResult, include_all: bool = True) -> pd.Da
     warned = {w["설계사"] for w in result.warnings if w["설계사"]}
     for name in names:
         m = person_metrics(result, name)
-        row = {k: m[k] for k in ["이름", "지급 건수", "지급 인정보험료", "환수 건수", "환수 인정보험료", "생보 시책", "손보 시책", "추가 자체산출", "총 시책", "소득세", "주민세", "실지급액"]}
+        row = {k: m[k] for k in ["이름", "실지급액", "지급 건수", "지급 인정보험료", "환수 건수", "환수 인정보험료", "생보 시책", "손보 시책", "추가 자체산출", "총 시책", "소득세", "주민세"]}
         if warned:
             row["확인"] = "확인 필요" if name in warned else ""
         rows.append(row)
@@ -696,37 +696,37 @@ def export_excel(result: AnalysisResult) -> bytes:
             for col_no in (start, start + 1):
                 ws.cell(row_no, col_no).border = border
     header_row = next_row + 3
-    summary_headers = ["이름", "지급 건수", "지급 인정보험료", "환수 건수", "환수 인정보험료", "생보 시책", "손보 시책", "추가 자체산출", "총 시책", "소득세", "주민세", "실지급액", "확인"]
+    summary_headers = ["이름", "실지급액", "지급 건수", "지급 인정보험료", "환수 건수", "환수 인정보험료", "생보 시책", "손보 시책", "추가 자체산출", "총 시책", "소득세", "주민세", "확인"]
     ws.append([])
     for col, header in enumerate(summary_headers, 1):
         ws.cell(header_row, col, header)
     style_header(ws, header_row, 1, len(summary_headers))
     warned_names = {w["설계사"] for w in result.warnings if w.get("설계사")}
     for row_no, m in enumerate(metrics, header_row + 1):
-        values = [m["이름"], m["지급 건수"], m["지급 인정보험료"], m["환수 건수"], m["환수 인정보험료"], m["생보 시책"], m["손보 시책"], m["추가 자체산출"], m["총 시책"], m["소득세"], m["주민세"], m["실지급액"], "확인 필요" if m["이름"] in warned_names else ""]
+        values = [m["이름"], m["실지급액"], m["지급 건수"], m["지급 인정보험료"], m["환수 건수"], m["환수 인정보험료"], m["생보 시책"], m["손보 시책"], m["추가 자체산출"], m["총 시책"], m["소득세"], m["주민세"], "확인 필요" if m["이름"] in warned_names else ""]
         for col, value in enumerate(values, 1):
             ws.cell(row_no, col, value_out(value))
     style_body(ws, header_row + 1, header_row + len(metrics), summary_headers)
     for row_no in range(header_row + 1, header_row + len(metrics) + 1):
-        ws.cell(row_no, 2).number_format = '0"건"'
-        ws.cell(row_no, 4).number_format = '0"건"'
+        ws.cell(row_no, 3).number_format = '0"건"'
+        ws.cell(row_no, 5).number_format = '0"건"'
         if ws.cell(row_no, 13).value:
             ws.cell(row_no, 13).fill = amber_fill
     total_row = header_row + len(metrics) + 1
-    totals = ["합계", sum(m["지급 건수"] for m in metrics), sum((m["지급 인정보험료"] for m in metrics), Decimal("0")), sum(m["환수 건수"] for m in metrics), sum((m["환수 인정보험료"] for m in metrics), Decimal("0")), sum((m["생보 시책"] for m in metrics), Decimal("0")), sum((m["손보 시책"] for m in metrics), Decimal("0")), sum((m["추가 자체산출"] for m in metrics), Decimal("0")), sum((m["총 시책"] for m in metrics), Decimal("0")), sum((m["소득세"] for m in metrics), Decimal("0")), sum((m["주민세"] for m in metrics), Decimal("0")), sum((m["실지급액"] for m in metrics), Decimal("0")), ""]
+    totals = ["합계", sum((m["실지급액"] for m in metrics), Decimal("0")), sum(m["지급 건수"] for m in metrics), sum((m["지급 인정보험료"] for m in metrics), Decimal("0")), sum(m["환수 건수"] for m in metrics), sum((m["환수 인정보험료"] for m in metrics), Decimal("0")), sum((m["생보 시책"] for m in metrics), Decimal("0")), sum((m["손보 시책"] for m in metrics), Decimal("0")), sum((m["추가 자체산출"] for m in metrics), Decimal("0")), sum((m["총 시책"] for m in metrics), Decimal("0")), sum((m["소득세"] for m in metrics), Decimal("0")), sum((m["주민세"] for m in metrics), Decimal("0")), ""]
     for col, value in enumerate(totals, 1):
         cell = ws.cell(total_row, col, value_out(value))
         total_font = Font(name="NanumGothic", size=11.5, bold=True, color=WHITE)
         cell.fill, cell.font, cell.border = navy_fill, total_font, Border(top=Side(style="double", color=NAVY), bottom=Side(style="medium", color=NAVY))
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        if col in (3, 5, 6, 7, 8, 9, 10, 11, 12):
+        if col in (2, 4, 6, 7, 8, 9, 10, 11, 12):
             set_money_format(cell, value)
             cell.font = total_font
-        elif col in (2, 4):
+        elif col in (3, 5):
             cell.number_format = '0"건"'
     ws.row_dimensions[total_row].height = 28
     add_table(ws, "TOverallSummary", f"A{header_row}:M{header_row + len(metrics)}")
-    widths = [12, 11, 17, 11, 17, 15, 15, 17, 15, 13, 13, 15, 12, 12]
+    widths = [12, 16, 11, 17, 11, 17, 15, 15, 17, 15, 13, 13, 12, 12]
     for i, width in enumerate(widths, 1): ws.column_dimensions[get_column_letter(i)].width = width
     prepare(ws, f"A{header_row + 1}")
 
@@ -1056,7 +1056,7 @@ def _summary_pdf(result: AnalysisResult) -> bytes:
     ] if v)
     story = [_p("화랑 WORKSPACE", styles["brand"]), _p("전체 지급 요약", styles["title"]), _p(period, styles["sub"]), Spacer(1, 5*mm)]
     df = summary_dataframe(result, include_all=False)
-    cols = ["이름", "지급 건수", "지급 인정보험료", "환수 건수", "환수 인정보험료", "생보 시책", "손보 시책", "추가 자체산출", "총 시책", "실지급액"]
+    cols = ["이름", "실지급액", "지급 건수", "지급 인정보험료", "환수 건수", "환수 인정보험료", "생보 시책", "손보 시책", "추가 자체산출", "총 시책"]
     if "확인" in df.columns:
         cols.append("확인")
     data = [[_p(c, styles["header"]) for c in cols]]
@@ -1070,7 +1070,7 @@ def _summary_pdf(result: AnalysisResult) -> bytes:
                 value = money(value)
             vals.append(_p(value, styles["center"]))
         data.append(vals)
-    widths = [17, 14, 24, 14, 24, 22, 22, 24, 23, 23] + ([18] if len(cols) == 11 else [])
+    widths = [17, 23, 14, 24, 14, 24, 22, 22, 24, 23] + ([18] if len(cols) == 11 else [])
     table = Table(data, colWidths=[w*mm for w in widths], repeatRows=1)
     commands = [("BACKGROUND", (0,0), (-1,0), colors.HexColor(f"#{NAVY}")), ("TEXTCOLOR", (0,0), (-1,0), colors.white), ("GRID", (0,0), (-1,-1), .35, colors.HexColor("#D0D5DD")), ("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F8FAFC")]), ("TOPPADDING", (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5)]
     table.setStyle(TableStyle(commands)); story.append(table)
@@ -1208,7 +1208,7 @@ def display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             shown[col] = shown[col].map(
                 lambda v: "" if v is None or str(v).strip() == "" else (format(D(v), "f").rstrip("0").rstrip(".") or "0")
             )
-        elif col == "지급기준액" or any(token in col for token in ("보험료", "시책", "실지급액", "세", "금액", "합계", "차이")):
+        elif col == "지급기준액" or any(token in col for token in ("보험료", "시책", "산출", "실지급액", "세", "금액", "합계", "차이")):
             shown[col] = shown[col].map(money)
     return shown
 
