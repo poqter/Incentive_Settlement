@@ -1,0 +1,14 @@
+개인시책 정산 도우미 실행 방법
+
+1. app.py, requirements.txt, fonts 폴더를 같은 프로젝트 폴더에 둡니다.
+2. VS Code에서 해당 폴더를 엽니다.
+3. 터미널에서 아래 명령을 실행합니다.
+
+   pip install -r requirements.txt
+   streamlit run app.py
+
+4. 브라우저가 열리면 XLSX 지급내역 파일을 업로드합니다.
+
+주의
+- fonts 폴더를 app.py와 함께 배포해야 PDF 한글이 정상적으로 표시됩니다.
+- Streamlit Cloud에서는 app.py, requirements.txt, fonts 폴더를 모두 GitHub 저장소에 올립니다.
