@@ -663,8 +663,40 @@ def render_app():
     .stAppHeader {{background:#f6f8fb !important}}
     [data-testid="stToolbar"] {{background:transparent !important}}
     .block-container {{padding-top:1.5rem;max-width:1500px}}
-    [data-testid="stSidebar"] {{background:#172a46}}
+    [data-testid="stSidebar"] {{
+        background:linear-gradient(180deg,#172a46 0%,#1d3557 100%);
+    }}
     [data-testid="stSidebar"] * {{color:#fff}}
+    [data-testid="stSidebarContent"] {{padding-top:1.25rem}}
+    .side-brand {{
+        color:#7fb2f0 !important;font-size:.72rem;font-weight:800;
+        letter-spacing:.09em;margin-bottom:.2rem;
+    }}
+    .side-title {{
+        color:#fff !important;font-size:1.18rem;font-weight:800;
+        padding-bottom:1rem;border-bottom:1px solid rgba(255,255,255,.12);
+        margin-bottom:1rem;
+    }}
+    .side-section {{
+        color:#aebfd5 !important;font-size:.76rem;font-weight:700;
+        letter-spacing:.04em;margin:.15rem 0 .45rem;
+    }}
+    [data-testid="stSidebar"] [role="radiogroup"] {{gap:.16rem}}
+    [data-testid="stSidebar"] [role="radiogroup"] label {{
+        width:100%;min-height:2rem;padding:.38rem .62rem;border-radius:8px;
+        border:1px solid transparent;transition:background .15s ease,border-color .15s ease;
+    }}
+    [data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {{display:none}}
+    [data-testid="stSidebar"] [role="radiogroup"] label:hover {{
+        background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.08);
+    }}
+    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
+        background:#2f67b1;border-color:#5f91d0;
+        box-shadow:0 4px 12px rgba(0,0,0,.14);
+    }}
+    [data-testid="stSidebar"] [role="radiogroup"] label p {{
+        margin:0;font-size:.88rem;font-weight:600;
+    }}
     .brand {{font-size:.82rem;color:#2f67b1;font-weight:700;letter-spacing:.08em}}
     .title {{font-size:2rem;color:#172a46;font-weight:800;margin:.15rem 0}}
     .sub {{color:#667085;margin-bottom:1.2rem}}
@@ -714,10 +746,12 @@ def render_app():
             if not result.payment_month: result.payment_month = st.text_input("지급월 (선택)", placeholder="예: 2026년 06월")
         with c2:
             if not result.performance_month: result.performance_month = st.text_input("업적월 (선택)", placeholder="예: 2026년 05월")
-    options = ["전체"] + NAV_NAMES
+    option_map = {"전체": "전체", "허탁 · 지점장": "허탁"}
+    option_map.update({name: name for name in NAV_NAMES if name != LEADER})
     with st.sidebar:
-        st.markdown("### 조회 대상")
-        selected = st.radio("조회 대상", options, index=0, label_visibility="collapsed")
+        st.markdown('<div class="side-brand">화랑 WORKSPACE</div><div class="side-title">개인시책 정산</div><div class="side-section">조회 대상</div>', unsafe_allow_html=True)
+        selected_label = st.radio("조회 대상", list(option_map), index=0, label_visibility="collapsed")
+        selected = option_map[selected_label]
     global_warnings = [w for w in result.warnings if not w.get("설계사")]
     if global_warnings:
         st.markdown('<div class="warning-box">' + '<br>'.join(w["내용"] for w in global_warnings) + '</div>', unsafe_allow_html=True)
@@ -737,9 +771,11 @@ def render_app():
         for col, (label, value) in zip(columns, cards):
             col.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>', unsafe_allow_html=True)
         st.markdown("### 전체 요약")
-        sort = st.selectbox("정렬", ["기본 순서", "총 시책 높은 순", "총 시책 낮은 순", "실지급액 높은 순", "지급 인정보험료 높은 순", "환수액 큰 순"], label_visibility="collapsed")
-        if sort != "기본 순서":
-            mapping = {"총 시책 높은 순":("총 시책",False),"총 시책 낮은 순":("총 시책",True),"실지급액 높은 순":("실지급액",False),"지급 인정보험료 높은 순":("지급 인정보험료",False),"환수액 큰 순":("환수 인정보험료",False)}
+        sort = st.selectbox("정렬", ["이름 가나다순", "총 시책 높은 순", "총 시책 낮은 순"], label_visibility="collapsed")
+        if sort == "이름 가나다순":
+            df = df.sort_values("이름", ascending=True, kind="stable")
+        else:
+            mapping = {"총 시책 높은 순":("총 시책",False),"총 시책 낮은 순":("총 시책",True)}
             col, asc = mapping[sort]; df = df.sort_values(col, ascending=asc, kind="stable")
         st.dataframe(display_dataframe(df), use_container_width=True, hide_index=True, height=720)
         c1, c2 = st.columns(2)
