@@ -1447,17 +1447,21 @@ def render_app():
     if selected == "전체":
         df = summary_dataframe(result, include_all=True)
         active = df[df["이름"].map(result.has_activity)]
+        positive_incentive = sum((D(v) for v in active["총 시책"] if D(v) >= 0), Decimal("0"))
+        refund_incentive = sum((D(v) for v in active["총 시책"] if D(v) < 0), Decimal("0"))
         cards = [
             ("대상 인원", f"{len(TARGET_NAMES)}명"),
             ("총 계약 건수", f"{int(active['지급 건수'].sum()+active['환수 건수'].sum())}건"),
             ("지급 인정보험료", money(sum((D(v) for v in active["지급 인정보험료"]), Decimal('0')))),
             ("환수 인정보험료", money(sum((D(v) for v in active["환수 인정보험료"]), Decimal('0')))),
-            ("총 시책", money(sum((D(v) for v in active["총 시책"]), Decimal('0')))),
+            ("총 시책", money(positive_incentive)),
+            ("총 환수금액", money(refund_incentive)),
             ("실지급액", money(sum((D(v) for v in active["실지급액"]), Decimal('0')))),
         ]
-        columns = st.columns(6)
+        columns = st.columns(7)
         for col, (label, value) in zip(columns, cards):
-            col.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>', unsafe_allow_html=True)
+            value_style = ' style="color:#B42318;"' if label == "총 환수금액" else ""
+            col.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value"{value_style}>{value}</div></div>', unsafe_allow_html=True)
         st.markdown("### 전체 요약")
         sort = st.selectbox("정렬", ["이름 가나다순", "총 시책 높은 순", "총 시책 낮은 순"], label_visibility="collapsed")
         active_df = df[df["이름"].map(result.has_activity)].copy()
