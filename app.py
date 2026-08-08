@@ -568,6 +568,7 @@ def _pdf_styles():
         "body": ParagraphStyle("body", parent=styles["Normal"], fontName=gothic, fontSize=7.8, leading=10.7, alignment=1),
         "small": ParagraphStyle("small", parent=styles["Normal"], fontName=gothic, fontSize=7.4, leading=9.5, alignment=1),
         "metric": ParagraphStyle("metric", parent=styles["Normal"], fontName=bold, fontSize=14, leading=18, alignment=1, textColor=colors.HexColor(f"#{NAVY}")),
+        "metric_negative": ParagraphStyle("metric_negative", parent=styles["Normal"], fontName=bold, fontSize=14, leading=18, alignment=1, textColor=colors.HexColor("#9B1C1C")),
         "center": ParagraphStyle("center", parent=styles["Normal"], fontName=gothic, fontSize=8, leading=10.5, alignment=1),
         "header": ParagraphStyle("header", parent=styles["Normal"], fontName=bold, fontSize=8, leading=10.5, alignment=1, textColor=colors.white),
         "warning": ParagraphStyle("warning", parent=styles["Normal"], fontName=bold, fontSize=9, leading=12, textColor=colors.HexColor(f"#{RED}")),
@@ -660,9 +661,24 @@ def _person_pdf(result: AnalysisResult, name: str) -> bytes:
         "13차월 추가 시책",
     ] if v)
     story = [_p("화랑 WORKSPACE", styles["brand"]), _p(f"{name} 개인시책 정산서", styles["title"]), _p(period, styles["sub"]), Spacer(1, 4*mm)]
-    metric_data = [[_p("총 시책", styles["center"]), _p("소득세", styles["center"]), _p("주민세", styles["center"]), _p("실지급액", styles["center"])], [_p(money(m["총 시책"]), styles["metric"]), _p(money(m["소득세"]), styles["center"]), _p(money(m["주민세"]), styles["center"]), _p(money(m['실지급액']), styles["metric"])]]
+    payment_amount = D(m["실지급액"])
+    negative_payment = payment_amount < 0
+    positive_payment = payment_amount > 0
+    if negative_payment:
+        payment_style = styles["metric_negative"]
+        payment_background = colors.HexColor(f"#{LIGHT_RED}")
+    elif positive_payment:
+        payment_style = styles["metric"]
+        payment_background = colors.HexColor("#DCEAFE")
+    else:
+        payment_style = styles["center"]
+        payment_background = colors.white
+    metric_data = [[_p("총 시책", styles["center"]), _p("소득세", styles["center"]), _p("주민세", styles["center"]), _p("실지급액", styles["center"])], [_p(money(m["총 시책"]), styles["metric"]), _p(money(m["소득세"]), styles["center"]), _p(money(m["주민세"]), styles["center"]), _p(money(m['실지급액']), payment_style)]]
     metric = Table(metric_data, colWidths=[45*mm]*4, rowHeights=[8*mm, 14*mm])
-    metric.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor(f"#{LIGHT_BLUE}")),("BACKGROUND",(3,1),(3,1),colors.HexColor("#DCEAFE")),("GRID",(0,0),(-1,-1),.5,colors.HexColor("#B7C6DA")),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
+    metric_commands = [("BACKGROUND",(0,0),(-1,0),colors.HexColor(f"#{LIGHT_BLUE}")),("BACKGROUND",(3,1),(3,1),payment_background),("GRID",(0,0),(-1,-1),.5,colors.HexColor("#B7C6DA")),("VALIGN",(0,0),(-1,-1),"MIDDLE")]
+    if negative_payment:
+        metric_commands.append(("BOX",(3,1),(3,1),.7,colors.HexColor("#E3A6A3")))
+    metric.setStyle(TableStyle(metric_commands))
     story.append(metric)
     person_warnings = [w for w in result.warnings if w.get("설계사") == name]
     if person_warnings:
@@ -750,7 +766,11 @@ def display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for col in shown.columns:
         if col.endswith("건수"):
             shown[col] = shown[col].map(lambda v: f"{v}건")
-        elif any(token in col for token in ("보험료", "시책", "실지급액", "세", "금액", "합계", "차이")):
+        elif col == "시상률":
+            shown[col] = shown[col].map(
+                lambda v: "" if v is None or str(v).strip() == "" else (format(D(v), "f").rstrip("0").rstrip(".") or "0")
+            )
+        elif col == "지급기준액" or any(token in col for token in ("보험료", "시책", "실지급액", "세", "금액", "합계", "차이")):
             shown[col] = shown[col].map(money)
     return shown
 
@@ -771,6 +791,15 @@ def centered_styler(df: pd.DataFrame, refund_mask=None):
             axis=1,
         )
     return styler
+
+
+def render_centered_table(st, df: pd.DataFrame, refund_mask=None, min_width: int = 760) -> None:
+    """모든 셀을 가운데 정렬한 전체 길이 표를 가로 스크롤 형태로 표시합니다."""
+    styler = centered_styler(df, refund_mask).format(escape="html").hide(axis="index")
+    st.markdown(
+        f'<div class="hw-table-wrap" style="--table-min-width:{min_width}px">{styler.to_html()}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def person_summary_dataframe(result: AnalysisResult, name: str) -> pd.DataFrame:
@@ -873,7 +902,22 @@ def render_app():
     .metric-label {{color:#667085;font-size:.82rem}}
     .metric-value {{color:#172a46;font-size:1.35rem;font-weight:800;margin-top:5px}}
     .warning-box {{background:#fff1f1;border-left:4px solid #b42318;padding:12px 14px;border-radius:8px;color:#8d1b13}}
-    div[data-testid="stDataFrame"] {{background:#fff;border-radius:12px}}
+    .hw-table-wrap {{
+        width:100%;overflow-x:auto;margin:.35rem 0 1rem;border:1px solid #d8dee8;
+        border-radius:11px;background:#fff;box-shadow:0 2px 8px rgba(23,42,70,.035);
+    }}
+    .hw-table-wrap table {{
+        width:100%;min-width:var(--table-min-width);border-collapse:collapse;
+        font-size:.86rem;color:#172a46;
+    }}
+    .hw-table-wrap th,.hw-table-wrap td {{
+        text-align:center !important;vertical-align:middle !important;
+        padding:.58rem .55rem;border-right:1px solid #d8dee8;border-bottom:1px solid #d8dee8;
+        white-space:normal;
+    }}
+    .hw-table-wrap th {{background:#eaf1fa;color:#415b7a;font-weight:700}}
+    .hw-table-wrap tr:last-child td {{border-bottom:0}}
+    .hw-table-wrap th:last-child,.hw-table-wrap td:last-child {{border-right:0}}
     [data-testid="stFileUploader"] section,
     [data-testid="stFileUploaderDropzone"] {{
         background:#ffffff !important;
@@ -946,7 +990,7 @@ def render_app():
         else:
             mapping = {"총 시책 높은 순":("총 시책",False),"총 시책 낮은 순":("총 시책",True)}
             col, asc = mapping[sort]; df = df.sort_values(col, ascending=asc, kind="stable")
-        st.dataframe(centered_styler(display_dataframe(df)), use_container_width=True, hide_index=True, height=720)
+        render_centered_table(st, display_dataframe(df), min_width=1220)
         period_file = re.sub(r"\s+", "", result.payment_month) if result.payment_month else ""
         pdf_mode = st.radio(
             "전체 정산서 다운로드 방식",
@@ -960,21 +1004,24 @@ def render_app():
             c1.download_button("설계사별 개인정산서 ZIP", export_individual_pdfs_zip(result), file_name=f"화랑사업부_설계사별_개인시책정산서_{period_file+'지급' if period_file else ''}.zip", mime="application/zip", use_container_width=True)
         c2.download_button("전체 지급요약 엑셀", export_excel(result), file_name=f"화랑사업부_개인시책지급요약_{period_file+'지급' if period_file else ''}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     else:
-        m = person_metrics(result, selected)
         st.markdown(f"### {selected} 개인 정산")
+        if not result.has_activity(selected):
+            st.info(f"{selected} 설계사의 요약할 정산 내역이 없습니다.")
+            return
+        m = person_metrics(result, selected)
         cards = [("총 시책", money(m["총 시책"])),("소득세",money(m["소득세"])),("주민세",money(m["주민세"])),("실지급액",money(m["실지급액"]))]
         cols=st.columns(4)
         for col,(label,value) in zip(cols,cards): col.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>',unsafe_allow_html=True)
         personal_warnings=[w for w in result.warnings if w.get("설계사")==selected]
         if personal_warnings: st.markdown('<div class="warning-box">'+'<br>'.join(f"{w['보험사']+' · ' if w['보험사'] else ''}{w['내용']} 차이 {money(w['차이'])}" for w in personal_warnings)+'</div>',unsafe_allow_html=True)
         st.markdown("#### 정산 요약")
-        st.dataframe(centered_styler(person_summary_dataframe(result, selected)), use_container_width=True, hide_index=True)
+        render_centered_table(st, person_summary_dataframe(result, selected), min_width=760)
         companies=company_rows(result,selected)
         if companies:
             st.markdown("#### 보험사별 원본 지급·환수")
             cdf=pd.DataFrame(companies)
             if not any(cdf["차이"].map(D)!=0): cdf=cdf[["구분","보험사","원본 금액"]]
-            st.dataframe(centered_styler(display_dataframe(cdf)),use_container_width=True,hide_index=True)
+            render_centered_table(st, display_dataframe(cdf), min_width=620)
         for section in ("생보","손보","추가 자체산출"):
             st.markdown(f"#### {section} 상세내역")
             ddf=detail_dataframe(result,section,selected,summarize_product=False)
@@ -983,11 +1030,9 @@ def render_app():
                 refund_mask = ddf["지급/환수 구분"].eq("환수")
                 screen_columns = ["보험사","지급/환수 구분","증권번호","계약자명","계약일","시상내용","인정보험료","시상률","지급기준액","상품명","비고"]
                 shown = display_dataframe(ddf[screen_columns]).rename(columns={"지급/환수 구분":"지급/환수"})
-                st.dataframe(centered_styler(shown, refund_mask),use_container_width=True,hide_index=True,height=min(700,42*(len(ddf)+1)))
-        if result.has_activity(selected):
-            period_file=re.sub(r"\s+","",result.payment_month) if result.payment_month else ""
-            st.download_button(f"{selected} 개인정산서 PDF",export_pdf(result,selected),file_name=f"{selected}_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf",mime="application/pdf",use_container_width=True)
-        else: st.info("이번 지급월에는 정산 내역이 없습니다.")
+                render_centered_table(st, shown, refund_mask, min_width=1380)
+        period_file=re.sub(r"\s+","",result.payment_month) if result.payment_month else ""
+        st.download_button(f"{selected} 개인정산서 PDF",export_pdf(result,selected),file_name=f"{selected}_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf",mime="application/pdf",use_container_width=True)
 
 
 if __name__ == "__main__":
