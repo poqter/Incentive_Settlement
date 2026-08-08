@@ -858,12 +858,17 @@ def export_excel(result: AnalysisResult) -> bytes:
         for col, header in enumerate(final_headers, 1):
             ws.cell(row_no, col, value_out(record[header]))
     style_body(ws, 5, row_no, final_headers)
+    for data_row in range(5, row_no + 1):
+        ws.cell(data_row, 3).number_format = '0"건"'
+        ws.cell(data_row, 4).number_format = '0"건"'
     if branch_rows:
         add_table(ws, "TInsurerFinalSummary", f"A4:I{row_no}")
         row_no += 1
         ws.cell(row_no, 1, "소계")
         ws.cell(row_no, 3, sum(r["지급 계약 건수"] for r in branch_rows))
         ws.cell(row_no, 4, sum(r["환수 계약 건수"] for r in branch_rows))
+        ws.cell(row_no, 3).number_format = '0"건"'
+        ws.cell(row_no, 4).number_format = '0"건"'
         for col, key in enumerate(("지급 시책", "환수 시책", "추가 자체산출", "최종 시책"), 5):
             value = sum((D(r[key]) for r in branch_rows), Decimal("0"))
             ws.cell(row_no, col, value_out(value))
@@ -911,10 +916,15 @@ def export_excel(result: AnalysisResult) -> bytes:
             for col, header in enumerate(person_headers, 1):
                 ws.cell(row_no, col, value_out(record[header]))
         style_body(ws, data_start, row_no, person_headers)
+        for data_row in range(data_start, row_no + 1):
+            ws.cell(data_row, 3).number_format = '0"건"'
+            ws.cell(data_row, 4).number_format = '0"건"'
         row_no += 1
         ws.cell(row_no, 1, "소계")
         ws.cell(row_no, 3, sum(r["지급 계약 건수"] for r in rows))
         ws.cell(row_no, 4, sum(r["환수 계약 건수"] for r in rows))
+        ws.cell(row_no, 3).number_format = '0"건"'
+        ws.cell(row_no, 4).number_format = '0"건"'
         for col, key in enumerate(("지급 시책", "환수 시책", "추가 자체산출", "최종 시책"), 5):
             value = sum((D(r[key]) for r in rows), Decimal("0"))
             ws.cell(row_no, col, value_out(value))
