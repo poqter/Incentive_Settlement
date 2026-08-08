@@ -916,7 +916,8 @@ def render_app():
         white-space:normal;
     }}
     .hw-table-wrap th {{background:#eaf1fa;color:#415b7a;font-weight:700}}
-    .hw-table-wrap tr:last-child td {{border-bottom:0}}
+    .hw-table-wrap tbody tr:last-child td {{border-bottom:1px solid #d8dee8 !important}}
+    .hw-table-wrap table {{margin-bottom:0 !important}}
     .hw-table-wrap th:last-child,.hw-table-wrap td:last-child {{border-right:0}}
     [data-testid="stFileUploader"] section,
     [data-testid="stFileUploaderDropzone"] {{
