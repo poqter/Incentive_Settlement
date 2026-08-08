@@ -1,7 +1,28 @@
-﻿[theme]
+[theme]
 base = "light"
 primaryColor = "#2F67B1"
 backgroundColor = "#F6F8FB"
 secondaryBackgroundColor = "#FFFFFF"
 textColor = "#172A46"
-font = "sans serif"
+borderColor = "#D0D5DD"
+dataframeBorderColor = "#D0D5DD"
+dataframeHeaderBackgroundColor = "#EAF1FA"
+showWidgetBorder = true
+
+[theme.light]
+primaryColor = "#2F67B1"
+backgroundColor = "#F6F8FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#172A46"
+borderColor = "#D0D5DD"
+dataframeBorderColor = "#D0D5DD"
+dataframeHeaderBackgroundColor = "#EAF1FA"
+
+[theme.dark]
+primaryColor = "#2F67B1"
+backgroundColor = "#F6F8FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#172A46"
+borderColor = "#D0D5DD"
+dataframeBorderColor = "#D0D5DD"
+dataframeHeaderBackgroundColor = "#EAF1FA"
