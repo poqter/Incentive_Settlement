@@ -902,6 +902,13 @@ def render_app():
     .metric-label {{color:#667085;font-size:.82rem}}
     .metric-value {{color:#172a46;font-size:1.35rem;font-weight:800;margin-top:5px}}
     .warning-box {{background:#fff1f1;border-left:4px solid #b42318;padding:12px 14px;border-radius:8px;color:#8d1b13}}
+    .download-card-head {{min-height:88px;padding:.12rem .12rem .3rem}}
+    .download-card-title {{color:#172a46;font-size:1rem;font-weight:800;margin-bottom:.35rem}}
+    .download-card-desc {{color:#667085;font-size:.79rem;line-height:1.45}}
+    [data-testid="stVerticalBlockBorderWrapper"] {{
+        background:#fff;border-color:#d8dee8 !important;border-radius:14px !important;
+        box-shadow:0 4px 14px rgba(23,42,70,.045);
+    }}
     .hw-table-wrap {{
         width:100%;overflow-x:auto;margin:.35rem 0 1rem;border:1px solid #d8dee8;
         border-radius:11px;background:#fff;box-shadow:0 2px 8px rgba(23,42,70,.035);
@@ -993,17 +1000,20 @@ def render_app():
             col, asc = mapping[sort]; df = df.sort_values(col, ascending=asc, kind="stable")
         render_centered_table(st, display_dataframe(df), min_width=1220)
         period_file = re.sub(r"\s+", "", result.payment_month) if result.payment_month else ""
-        pdf_mode = st.radio(
-            "전체 정산서 다운로드 방식",
-            ["하나의 통합 PDF", "설계사별 개별 PDF ZIP"],
-            horizontal=True,
-        )
-        c1, c2 = st.columns(2)
-        if pdf_mode == "하나의 통합 PDF":
-            c1.download_button("전체 개인정산서 통합 PDF", export_pdf(result), file_name=f"화랑사업부_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf", mime="application/pdf", use_container_width=True)
-        else:
-            c1.download_button("설계사별 개인정산서 ZIP", export_individual_pdfs_zip(result), file_name=f"화랑사업부_설계사별_개인시책정산서_{period_file+'지급' if period_file else ''}.zip", mime="application/zip", use_container_width=True)
-        c2.download_button("전체 지급요약 엑셀", export_excel(result), file_name=f"화랑사업부_개인시책지급요약_{period_file+'지급' if period_file else ''}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        st.markdown("### 결과 다운로드")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            with st.container(border=True):
+                st.markdown('<div class="download-card-head"><div class="download-card-title">📘 통합 정산서 PDF</div><div class="download-card-desc">전체 지급 요약과 모든 개인 정산서를<br>하나의 PDF로 내려받습니다.</div></div>', unsafe_allow_html=True)
+                st.download_button("📥 통합 PDF 다운로드", export_pdf(result), file_name=f"화랑사업부_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf", mime="application/pdf", use_container_width=True)
+        with c2:
+            with st.container(border=True):
+                st.markdown('<div class="download-card-head"><div class="download-card-title">📦 설계사별 PDF ZIP</div><div class="download-card-desc">내역이 있는 설계사의 정산서를<br>개별 PDF로 묶어 내려받습니다.</div></div>', unsafe_allow_html=True)
+                st.download_button("📥 개별 PDF ZIP 다운로드", export_individual_pdfs_zip(result), file_name=f"화랑사업부_설계사별_개인시책정산서_{period_file+'지급' if period_file else ''}.zip", mime="application/zip", use_container_width=True)
+        with c3:
+            with st.container(border=True):
+                st.markdown('<div class="download-card-head"><div class="download-card-title">📊 지급 요약 Excel</div><div class="download-card-desc">전체 요약과 계약 상세내역,<br>확인이 필요한 검증 결과를 포함합니다.</div></div>', unsafe_allow_html=True)
+                st.download_button("📥 요약 Excel 다운로드", export_excel(result), file_name=f"화랑사업부_개인시책지급요약_{period_file+'지급' if period_file else ''}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     else:
         st.markdown(f"### {selected} 개인 정산")
         if not result.has_activity(selected):
