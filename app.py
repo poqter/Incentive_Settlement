@@ -15,6 +15,7 @@ import pandas as pd
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
@@ -272,6 +273,7 @@ def read_detail_sheet(ws, section: str) -> list[dict[str, Any]]:
             record[aliases.get(header, header)] = ws.cell(row_no, col).value if col else None
         record["모집인"] = name
         record["원장사용인명"] = normalize_name(record.get("원장사용인명"))
+        record["보험사 원본"] = str(record.get("보험사") or "").strip()
         record["보험사"] = normalize_insurer(record.get("보험사"))
         record["지급/환수 구분"] = str(record.get("지급/환수 구분") or "").strip()
         record["인정보험료"] = D(record.get("인정보험료"))
@@ -474,66 +476,470 @@ def detail_dataframe(result: AnalysisResult, section: str, name: str | None = No
 def export_excel(result: AnalysisResult) -> bytes:
     wb = Workbook()
     wb.remove(wb.active)
-    thin = Side(style="thin", color="D0D5DD")
+    active_names = [name for name in NAV_NAMES if result.has_activity(name)]
+    details = [row for section in ("생보", "손보", "추가 자체산출") for row in result.details.get(section, [])]
+
+    navy_fill = PatternFill("solid", fgColor=NAVY)
+    blue_fill = PatternFill("solid", fgColor=LIGHT_BLUE)
+    pale_blue_fill = PatternFill("solid", fgColor="F5F8FC")
+    red_fill = PatternFill("solid", fgColor=LIGHT_RED)
+    amber_fill = PatternFill("solid", fgColor="FFF4CE")
+    gray_fill = PatternFill("solid", fgColor=LIGHT_GRAY)
+    white_font = Font(name="NanumGothic", size=10, bold=True, color=WHITE)
+    body_font = Font(name="NanumGothic", size=10, color=NAVY)
+    title_font = Font(name="NanumGothic", size=20, bold=True, color=NAVY)
+    section_font = Font(name="NanumGothic", size=12, bold=True, color=NAVY)
+    thin = Side(style="thin", color="C9D3E1")
+    row_line = Side(style="medium", color="AAB7C8")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    row_border = Border(left=thin, right=thin, top=thin, bottom=row_line)
+    money_tokens = ("금액", "보험료", "시책", "산출", "합계", "실지급액", "세", "차이")
 
-    def add_sheet(title: str, df: pd.DataFrame, widths: dict[str, float] | None = None):
-        ws = wb.create_sheet(title)
-        headers = list(df.columns)
-        ws.append(headers)
-        for row in df.itertuples(index=False, name=None):
-            ws.append([dec_out(v) if isinstance(v, Decimal) else v for v in row])
-        for cell in ws[1]:
-            cell.fill = PatternFill("solid", fgColor=NAVY)
-            cell.font = Font(color=WHITE, bold=True)
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            cell.border = border
-        for row in ws.iter_rows(min_row=2):
-            for cell in row:
-                cell.border = border
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-                if isinstance(cell.value, (int, float)) and any(token in str(ws.cell(1, cell.column).value) for token in ("금액", "보험료", "시책", "합계", "실지급액", "세")):
-                    cell.number_format = '#,##0.########'
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
-        if ws.max_row >= 2 and ws.max_column >= 1:
-            ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
-            table = Table(displayName=f"T{len(wb.worksheets)}", ref=ref)
-            table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True, showFirstColumn=False, showLastColumn=False)
-            ws.add_table(table)
-        for idx, header in enumerate(headers, 1):
-            default = min(max(len(str(header)) + 4, 12), 22)
-            ws.column_dimensions[get_column_letter(idx)].width = (widths or {}).get(header, default)
+    def value_out(value: Any) -> Any:
+        if isinstance(value, Decimal):
+            return dec_out(value)
+        return value
+
+    def identifier(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        text = str(value).strip()
+        return re.sub(r"\.0+$", "", text)
+
+    def raw_insurer(row: dict[str, Any]) -> str:
+        return str(row.get("보험사 원본") or row.get("보험사") or "").strip()
+
+    def set_money_format(cell, value: Any) -> None:
+        number = D(value)
+        cell.number_format = '#,##0"원";[Red]-#,##0"원"' if number == number.to_integral_value() else '#,##0.########"원";[Red]-#,##0.########"원"'
+        if number < 0:
+            cell.font = Font(name="NanumGothic", size=10, color=RED)
+
+    def prepare(ws, freeze: str = "A2") -> None:
+        ws.freeze_panes = None
         ws.sheet_view.showGridLines = False
-        return ws
-
-    summary = summary_dataframe(result, include_all=False).copy()
-    for col in summary.columns:
-        summary[col] = summary[col].map(dec_out) if col not in ("이름", "확인") else summary[col]
-    add_sheet("전체 요약", summary, {"이름": 12, "지급 인정보험료": 18, "환수 인정보험료": 18, "추가 자체산출": 18})
-
-    company_data = []
-    for name in [n for n in NAV_NAMES if result.has_activity(n)]:
-        summary_id = person_metrics(result, name)["랩포탈ID"]
-        for row in company_rows(result, name, include_zero_anomalies=True):
-            company_data.append({"설계사": name, "랩포탈ID": summary_id, **{k: dec_out(v) if isinstance(v, Decimal) else v for k, v in row.items()}})
-    add_sheet("보험사별 지급요약", pd.DataFrame(company_data, columns=["설계사", "랩포탈ID", "구분", "보험사", "원본 금액", "일반 상세 산출액", "추가 자체산출액", "상세 최종 합계", "차이"]), {"설계사": 12, "보험사": 16})
-    add_sheet("생보 계약상세", detail_dataframe(result, "생보"), {"상품명": 55, "시상내용": 24, "증권번호": 18, "계약자명": 14})
-    add_sheet("손보 계약상세", detail_dataframe(result, "손보"), {"상품명": 55, "시상내용": 24, "증권번호": 18, "계약자명": 14})
-    add_sheet("추가 자체산출", detail_dataframe(result, "추가 자체산출"), {"상품명": 55, "시상내용": 24, "증권번호": 18, "계약자명": 14})
-    if result.warnings:
-        warning_rows = []
-        for w in result.warnings:
-            warning_rows.append({**w, "차이": dec_out(w["차이"])})
-        add_sheet("검증 결과", pd.DataFrame(warning_rows, columns=["설계사", "구분", "보험사", "내용", "차이"]), {"내용": 45})
-
-    for ws in wb.worksheets:
         ws.page_setup.orientation = "landscape"
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
         ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.page_margins.left = ws.page_margins.right = 0.25
         ws.page_margins.top = ws.page_margins.bottom = 0.45
+
+    def style_header(ws, row_no: int, first_col: int, last_col: int) -> None:
+        for cell in ws.iter_cols(min_col=first_col, max_col=last_col, min_row=row_no, max_row=row_no):
+            c = cell[0]
+            c.fill = navy_fill
+            c.font = white_font
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = border
+        ws.row_dimensions[row_no].height = 30
+
+    def style_body(ws, start: int, end: int, headers: list[str], refund_col: int | None = None) -> None:
+        if end < start:
+            return
+        for row_no in range(start, end + 1):
+            refund = refund_col and str(ws.cell(row_no, refund_col).value or "") == "환수"
+            for col_no, header in enumerate(headers, 1):
+                cell = ws.cell(row_no, col_no)
+                cell.font = body_font
+                cell.fill = red_fill if refund else (pale_blue_fill if row_no % 2 == 0 else PatternFill("solid", fgColor=WHITE))
+                cell.border = row_border
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                if any(token in header for token in money_tokens) and isinstance(cell.value, (int, float)):
+                    set_money_format(cell, cell.value)
+            ws.row_dimensions[row_no].height = 26
+
+    def add_table(ws, name: str, ref: str) -> None:
+        table = Table(displayName=name, ref=ref)
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=False, showFirstColumn=False, showLastColumn=False)
+        ws.add_table(table)
+
+    def internal_link(cell, location: str) -> None:
+        """외부 링크 경고 없이 통합 문서 내부 위치로 이동합니다."""
+        cell.hyperlink = Hyperlink(ref=cell.coordinate, location=location)
+        cell.font = Font(name="NanumGothic", size=10, color="0563C1", underline="single")
+
+    def add_person_navigation(ws, names: list[str], title_row: int, block_rows: dict[str, int], columns: int = 7) -> int:
+        ws.cell(title_row, 1, "설계사 바로가기").font = section_font
+        start_row = title_row + 1
+        for index, name in enumerate(names):
+            row_no = start_row + index // columns
+            col_no = 1 + index % columns
+            cell = ws.cell(row_no, col_no, name)
+            cell.fill = blue_fill
+            cell.border = border
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            # 표 제목보다 아래쪽 셀을 선택해 제목이 화면 상단 쪽에 함께 보이게 합니다.
+            internal_link(cell, f"'{ws.title}'!A{block_rows[name] + 6}")
+            ws.row_dimensions[row_no].height = 25
+        return start_row + ((len(names) - 1) // columns if names else 0)
+
+    def person_block_sheet(title: str, headers: list[str], records_by_name: dict[str, list[list[Any]]], widths: list[float], refund_col: int | None = None, freeze_col: str = "A"):
+        ws = wb.create_sheet(title)
+        names = [name for name in active_names if records_by_name.get(name)]
+        nav_rows = 1 + ((len(names) - 1) // 7 if names else 0)
+        first_block = 5 + nav_rows
+        block_rows: dict[str, int] = {}
+        cursor = first_block
+        for name in names:
+            block_rows[name] = cursor
+            cursor += 2 + len(records_by_name[name]) + 3
+        add_person_navigation(ws, names, 1, block_rows)
+        table_index = 1
+        for name in names:
+            title_row = block_rows[name]
+            ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=len(headers))
+            title_cell = ws.cell(title_row, 1, f"{name} · {title}")
+            title_cell.fill = blue_fill
+            title_cell.font = section_font
+            title_cell.alignment = Alignment(horizontal="left", vertical="center")
+            title_cell.border = border
+            ws.row_dimensions[title_row].height = 28
+            header_at = title_row + 1
+            for col, header in enumerate(headers, 1):
+                ws.cell(header_at, col, header)
+            style_header(ws, header_at, 1, len(headers))
+            for values in records_by_name[name]:
+                ws.append([]) if ws.max_row < header_at else None
+                row_no = ws.max_row + 1
+                for col, value in enumerate(values, 1):
+                    ws.cell(row_no, col, value_out(value))
+            data_end = header_at + len(records_by_name[name])
+            style_body(ws, header_at + 1, data_end, headers, refund_col=refund_col)
+            add_table(ws, f"T{title.replace('·', '').replace(' ', '')}{table_index}", f"A{header_at}:{get_column_letter(len(headers))}{data_end}")
+            table_index += 1
+        for col, width in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(col)].width = width
+        prepare(ws, f"{freeze_col}{first_block + 2}")
+        return ws
+
+    def contract_groups() -> list[dict[str, Any]]:
+        grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+        for row in details:
+            policy = identifier(row.get("증권번호"))
+            fallback = f"{row.get('구분')}:{row.get('원본행')}" if not policy else policy
+            key = (row.get("구분"), row.get("모집인"), identifier(row.get("랩포탈ID")), raw_insurer(row), row.get("보험사"), row.get("지급/환수 구분"), fallback)
+            grouped[key].append(row)
+        output = []
+        for key, rows in grouped.items():
+            first = rows[0]
+            awards = [str(r.get("시상내용") or "").strip() for r in rows if str(r.get("시상내용") or "").strip()]
+            products = [str(r.get("상품명") or "").strip() for r in rows if str(r.get("상품명") or "").strip()]
+            notes = [str(r.get("비고") or "").strip() for r in rows if str(r.get("비고") or "").strip()]
+            unique_text = lambda values: "\n".join(dict.fromkeys(values))
+            output.append({
+                "자료구분": key[0], "모집인": key[1], "랩포탈ID": key[2], "보험사": key[3],
+                "보험사 정규명": key[4], "지급/환수": key[5], "증권번호": identifier(first.get("증권번호")),
+                "계약자명": first.get("계약자명") or "", "계약일": date_text(first.get("계약일")),
+                "인정보험료": D(first.get("인정보험료")), "시상 내역 수": len(rows),
+                "시상내용": unique_text(awards), "지급기준액 합계": sum((D(r.get("지급기준액")) for r in rows), Decimal("0")),
+                "상품명": unique_text(products), "비고": unique_text(notes),
+            })
+        order = {name: index for index, name in enumerate(NAV_NAMES)}
+        return sorted(output, key=lambda r: (order.get(r["모집인"], 999), r["자료구분"], r["보험사"], r["계약일"], r["증권번호"]))
+
+    grouped_contracts = contract_groups()
+
+    # 1. 전체 지급요약
+    ws = wb.create_sheet("전체 지급요약")
+    ws.merge_cells("A1:N1")
+    ws["A1"] = "드림지점 개인시책 지급요약"
+    ws["A1"].font = title_font
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 36
+    period = " · ".join(v for v in (f"{result.payment_month} 지급" if result.payment_month else "", f"{result.performance_month} 업적" if result.performance_month else "") if v)
+    ws.merge_cells("A2:N2")
+    ws["A2"] = period or "지급월·업적월 미인식"
+    ws["A2"].font = Font(name="NanumGothic", size=11, bold=True, color=GRAY)
+    ws["A2"].alignment = Alignment(horizontal="center")
+    notice_row = 4
+    next_row = 6
+    if result.warnings:
+        ws.merge_cells(start_row=notice_row, start_column=1, end_row=notice_row, end_column=14)
+        ws.cell(notice_row, 1, f"확인 필요한 항목 {len(result.warnings)}건 · 자세한 내용은 ‘확인 필요’ 시트를 확인해 주세요.")
+        ws.cell(notice_row, 1).fill = amber_fill
+        ws.cell(notice_row, 1).alignment = Alignment(horizontal="center", vertical="center")
+        internal_link(ws.cell(notice_row, 1), "'확인 필요'!A1")
+        ws.cell(notice_row, 1).font = Font(name="NanumGothic", size=12, bold=True, color="7A4E00", underline="single")
+        ws.row_dimensions[notice_row].height = 28
+    metrics = [person_metrics(result, name) for name in active_names]
+    positive_incentive = sum((m["총 시책"] for m in metrics if D(m["총 시책"]) > 0), Decimal("0"))
+    refund_incentive = sum((m["총 시책"] for m in metrics if D(m["총 시책"]) < 0), Decimal("0"))
+    cards = [
+        ("대상 인원", len(active_names), '0"명"'),
+        ("총 계약 건수", sum(m["지급 건수"] + m["환수 건수"] for m in metrics), '0"건"'),
+        ("지급 인정보험료", sum((m["지급 인정보험료"] for m in metrics), Decimal("0")), None),
+        ("환수 인정보험료", sum((m["환수 인정보험료"] for m in metrics), Decimal("0")), None),
+        ("총 시책", positive_incentive, None),
+        ("총 환수금액", refund_incentive, None),
+        ("실지급액", sum((m["실지급액"] for m in metrics), Decimal("0")), None),
+    ]
+    for index, (label, value, number_format) in enumerate(cards):
+        start = 1 + index * 2
+        ws.merge_cells(start_row=next_row, start_column=start, end_row=next_row, end_column=start + 1)
+        ws.merge_cells(start_row=next_row + 1, start_column=start, end_row=next_row + 1, end_column=start + 1)
+        label_cell, value_cell = ws.cell(next_row, start), ws.cell(next_row + 1, start)
+        label_cell.value, value_cell.value = label, value_out(value)
+        label_cell.fill = gray_fill
+        value_cell.fill = red_fill if label in ("환수 인정보험료", "총 환수금액") else blue_fill
+        label_cell.font = Font(name="NanumGothic", size=9, bold=True, color=GRAY)
+        value_cell.font = Font(name="NanumGothic", size=13, bold=True, color=NAVY if D(value) >= 0 else RED)
+        label_cell.alignment = value_cell.alignment = Alignment(horizontal="center", vertical="center")
+        if number_format:
+            value_cell.number_format = number_format
+        elif isinstance(value, Decimal):
+            set_money_format(value_cell, value)
+        value_cell.font = Font(name="NanumGothic", size=13, bold=True, color=RED if D(value) < 0 else NAVY)
+        for row_no in (next_row, next_row + 1):
+            for col_no in (start, start + 1):
+                ws.cell(row_no, col_no).border = border
+    header_row = next_row + 3
+    summary_headers = ["이름", "지급 건수", "지급 인정보험료", "환수 건수", "환수 인정보험료", "생보 시책", "손보 시책", "추가 자체산출", "총 시책", "소득세", "주민세", "실지급액", "확인"]
+    ws.append([])
+    for col, header in enumerate(summary_headers, 1):
+        ws.cell(header_row, col, header)
+    style_header(ws, header_row, 1, len(summary_headers))
+    warned_names = {w["설계사"] for w in result.warnings if w.get("설계사")}
+    for row_no, m in enumerate(metrics, header_row + 1):
+        values = [m["이름"], m["지급 건수"], m["지급 인정보험료"], m["환수 건수"], m["환수 인정보험료"], m["생보 시책"], m["손보 시책"], m["추가 자체산출"], m["총 시책"], m["소득세"], m["주민세"], m["실지급액"], "확인 필요" if m["이름"] in warned_names else ""]
+        for col, value in enumerate(values, 1):
+            ws.cell(row_no, col, value_out(value))
+    style_body(ws, header_row + 1, header_row + len(metrics), summary_headers)
+    for row_no in range(header_row + 1, header_row + len(metrics) + 1):
+        if ws.cell(row_no, 13).value:
+            ws.cell(row_no, 13).fill = amber_fill
+    total_row = header_row + len(metrics) + 1
+    totals = ["합계", sum(m["지급 건수"] for m in metrics), sum((m["지급 인정보험료"] for m in metrics), Decimal("0")), sum(m["환수 건수"] for m in metrics), sum((m["환수 인정보험료"] for m in metrics), Decimal("0")), sum((m["생보 시책"] for m in metrics), Decimal("0")), sum((m["손보 시책"] for m in metrics), Decimal("0")), sum((m["추가 자체산출"] for m in metrics), Decimal("0")), sum((m["총 시책"] for m in metrics), Decimal("0")), sum((m["소득세"] for m in metrics), Decimal("0")), sum((m["주민세"] for m in metrics), Decimal("0")), sum((m["실지급액"] for m in metrics), Decimal("0")), ""]
+    for col, value in enumerate(totals, 1):
+        cell = ws.cell(total_row, col, value_out(value))
+        total_font = Font(name="NanumGothic", size=11.5, bold=True, color=WHITE)
+        cell.fill, cell.font, cell.border = navy_fill, total_font, Border(top=Side(style="double", color=NAVY), bottom=Side(style="medium", color=NAVY))
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        if col in (3, 5, 6, 7, 8, 9, 10, 11, 12):
+            set_money_format(cell, value)
+            cell.font = total_font
+    ws.row_dimensions[total_row].height = 28
+    add_table(ws, "TOverallSummary", f"A{header_row}:M{header_row + len(metrics)}")
+    widths = [12, 11, 17, 11, 17, 15, 15, 17, 15, 13, 13, 15, 12, 12]
+    for i, width in enumerate(widths, 1): ws.column_dimensions[get_column_letter(i)].width = width
+    prepare(ws, f"A{header_row + 1}")
+
+    # 2. 계약별 합산 요약 — 같은 시트 안에서 모집인별 독립 표
+    contract_headers = ["자료구분", "모집인", "랩포탈ID", "보험사", "지급/환수", "증권번호", "계약자명", "계약일", "인정보험료", "시상 내역 수", "시상내용", "지급기준액 합계", "상품명"]
+    contract_by_name: dict[str, list[list[Any]]] = defaultdict(list)
+    for record in grouped_contracts:
+        contract_by_name[record["모집인"]].append([value_out(record[h]) for h in contract_headers])
+    person_block_sheet("계약별 합산 요약", contract_headers, contract_by_name, [12, 11, 16, 15, 12, 20, 13, 13, 16, 12, 36, 18, 50], refund_col=5, freeze_col="E")
+
+    # 3. 통합 계약상세 — 원본값을 유지하고 모집인별 독립 표
+    detail_headers = ["자료구분", "모집인", "랩포탈ID", "보험사", "지급/환수 구분", "증권번호", "계약자명", "계약일", "시상내용", "인정보험료", "시상률", "지급기준액", "상품명", "비고"]
+    detail_by_name: dict[str, list[list[Any]]] = defaultdict(list)
+    for row in details:
+        detail_by_name[row["모집인"]].append([row.get("구분"), row.get("모집인"), identifier(row.get("랩포탈ID")), raw_insurer(row), row.get("지급/환수 구분"), identifier(row.get("증권번호")), row.get("계약자명") or "", row.get("계약일"), row.get("시상내용") or "", dec_out(row.get("인정보험료")), dec_out(row.get("시상률")), dec_out(row.get("지급기준액")), row.get("상품명") or "", row.get("비고") or ""])
+    ws = person_block_sheet("통합 계약상세", detail_headers, detail_by_name, [12, 11, 16, 15, 13, 20, 13, 13, 24, 16, 12, 16, 55, 35], refund_col=5, freeze_col="E")
+    for row_no in range(1, ws.max_row + 1):
+        if ws.cell(row_no, 2).value in active_names:
+            ws.cell(row_no, 3).number_format = "@"
+            ws.cell(row_no, 6).number_format = "@"
+            if isinstance(ws.cell(row_no, 8).value, (date, datetime)):
+                ws.cell(row_no, 8).number_format = "yyyy-mm-dd"
+            ws.cell(row_no, 11).number_format = "0.########"
+            set_money_format(ws.cell(row_no, 12), ws.cell(row_no, 12).value)
+
+    # 4. 환수 관리 — 환수 계약이 있을 때만 생성
+    refund_map: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for record in (r for r in grouped_contracts if r["지급/환수"] == "환수"):
+        key = (record["모집인"], record["랩포탈ID"], record["보험사 정규명"], record["증권번호"] or f"{record['자료구분']}:{record['계약일']}:{record['계약자명']}")
+        if key not in refund_map:
+            refund_map[key] = dict(record)
+            continue
+        current = refund_map[key]
+        current["자료구분"] = " · ".join(dict.fromkeys((current["자료구분"] + " · " + record["자료구분"]).split(" · ")))
+        current["지급기준액 합계"] += record["지급기준액 합계"]
+        for text_key in ("시상내용", "상품명", "비고"):
+            current[text_key] = "\n".join(dict.fromkeys(filter(None, (current[text_key] + "\n" + record[text_key]).splitlines())))
+    refunds = list(refund_map.values())
+    if refunds:
+        refund_headers = ["모집인", "랩포탈ID", "보험사", "증권번호", "계약자명", "계약일", "환수 인정보험료", "환수 시책금액", "시상내용", "상품명", "비고"]
+        refund_by_name: dict[str, list[list[Any]]] = defaultdict(list)
+        for record in sorted(refunds, key=lambda r: (NAV_NAMES.index(r["모집인"]), -abs(r["지급기준액 합계"]))):
+            refund_by_name[record["모집인"]].append([record["모집인"], record["랩포탈ID"], record["보험사"], record["증권번호"], record["계약자명"], record["계약일"], dec_out(record["인정보험료"]), dec_out(record["지급기준액 합계"]), record["시상내용"], record["상품명"], record["비고"]])
+        ws = person_block_sheet("환수 관리", refund_headers, refund_by_name, [11, 16, 15, 20, 13, 13, 18, 18, 32, 50, 35], freeze_col="D")
+        for row_no in range(1, ws.max_row + 1):
+            if ws.cell(row_no, 1).value in active_names and ws.cell(row_no, 2).value:
+                for cell in ws[row_no][:len(refund_headers)]:
+                    cell.fill = red_fill
+        for table in ws.tables.values():
+            header_at = int(re.search(r"\d+", table.ref.split(":")[0]).group())
+            data_end = int(re.search(r"\d+", table.ref.split(":")[1]).group())
+            subtotal_row = data_end + 1
+            refund_total = sum((D(ws.cell(row_no, 8).value) for row_no in range(header_at + 1, data_end + 1)), Decimal("0"))
+            ws.cell(subtotal_row, 7, "소계")
+            ws.cell(subtotal_row, 8, dec_out(refund_total))
+            set_money_format(ws.cell(subtotal_row, 8), refund_total)
+            for cell in ws[subtotal_row][:len(refund_headers)]:
+                cell.fill = gray_fill
+                cell.font = Font(name="NanumGothic", size=11.5, bold=True, color=NAVY)
+                cell.border = row_border
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            ws.cell(subtotal_row, 8).font = Font(name="NanumGothic", size=11.5, bold=True, color=RED if refund_total < 0 else NAVY)
+            ws.row_dimensions[subtotal_row].height = 28
+
+    # 5. 보험사별 최종요약 — 지점 전체 합계 + 설계사별 보험사 합계
+    def blank_insurer_metric() -> dict[str, Any]:
+        return {
+            "지급 계약": set(), "환수 계약": set(), "지급 시책": Decimal("0"),
+            "환수 시책": Decimal("0"), "추가 자체산출": Decimal("0"), "설계사": set(),
+        }
+
+    insurer_by_name: dict[str, dict[tuple[str, str], dict[str, Any]]] = {
+        name: defaultdict(blank_insurer_metric) for name in active_names
+    }
+    for section in ("생보", "손보"):
+        for row in result.details.get(section, []):
+            name = row.get("모집인")
+            if name not in insurer_by_name:
+                continue
+            key = (section, row.get("보험사") or raw_insurer(row))
+            metric = insurer_by_name[name][key]
+            status = row.get("지급/환수 구분")
+            policy = identifier(row.get("증권번호")) or f"{section}:{row.get('원본행')}"
+            if status == "환수":
+                metric["환수 계약"].add(policy)
+                metric["환수 시책"] += D(row.get("지급기준액"))
+            else:
+                metric["지급 계약"].add(policy)
+                metric["지급 시책"] += D(row.get("지급기준액"))
+            metric["설계사"].add(name)
+    for row in result.details.get("추가 자체산출", []):
+        name = row.get("모집인")
+        if name not in insurer_by_name:
+            continue
+        key = ("손보", row.get("보험사") or raw_insurer(row))
+        insurer_by_name[name][key]["추가 자체산출"] += D(row.get("지급기준액"))
+        insurer_by_name[name][key]["설계사"].add(name)
+
+    def metric_row(kind: str, insurer: str, metric: dict[str, Any], include_people: bool) -> dict[str, Any]:
+        row = {
+            "구분": kind, "보험사": insurer, "지급 계약 건수": len(metric["지급 계약"]),
+            "환수 계약 건수": len(metric["환수 계약"]), "지급 시책": metric["지급 시책"],
+            "환수 시책": metric["환수 시책"], "추가 자체산출": metric["추가 자체산출"],
+            "최종 시책": metric["지급 시책"] + metric["환수 시책"] + metric["추가 자체산출"],
+        }
+        if include_people:
+            row["해당 설계사 수"] = len(metric["설계사"])
+        return row
+
+    branch_insurers: dict[tuple[str, str], dict[str, Any]] = defaultdict(blank_insurer_metric)
+    for name in active_names:
+        for key, metric in insurer_by_name[name].items():
+            branch = branch_insurers[key]
+            branch["지급 계약"].update((name, policy) for policy in metric["지급 계약"])
+            branch["환수 계약"].update((name, policy) for policy in metric["환수 계약"])
+            for amount_key in ("지급 시책", "환수 시책", "추가 자체산출"):
+                branch[amount_key] += metric[amount_key]
+            branch["설계사"].update(metric["설계사"])
+
+    ws = wb.create_sheet("보험사별 최종요약")
+    final_headers = ["구분", "보험사", "지급 계약 건수", "환수 계약 건수", "지급 시책", "환수 시책", "추가 자체산출", "최종 시책", "해당 설계사 수"]
+    person_headers = final_headers[:-1]
+    ws.merge_cells("A1:I1")
+    ws["A1"] = "보험사별 최종 시책 요약"
+    ws["A1"].font, ws["A1"].alignment = title_font, Alignment(horizontal="center")
+    ws.cell(3, 1, "지점 전체 보험사별 합계").font = section_font
+    for col, header in enumerate(final_headers, 1):
+        ws.cell(4, col, header)
+    style_header(ws, 4, 1, len(final_headers))
+    branch_rows = [metric_row(kind, insurer, metric, True) for (kind, insurer), metric in sorted(branch_insurers.items())]
+    branch_rows = [r for r in branch_rows if any(D(r[k]) != 0 for k in ("지급 시책", "환수 시책", "추가 자체산출", "최종 시책")) or r["지급 계약 건수"] or r["환수 계약 건수"]]
+    branch_rows.sort(key=lambda r: (D(r["최종 시책"]), r["보험사"]), reverse=True)
+    row_no = 4
+    for record in branch_rows:
+        row_no += 1
+        for col, header in enumerate(final_headers, 1):
+            ws.cell(row_no, col, value_out(record[header]))
+    style_body(ws, 5, row_no, final_headers)
+    if branch_rows:
+        add_table(ws, "TInsurerFinalSummary", f"A4:I{row_no}")
+
+    person_insurer_rows: dict[str, list[dict[str, Any]]] = {}
+    for name in active_names:
+        rows = [metric_row(kind, insurer, metric, False) for (kind, insurer), metric in sorted(insurer_by_name[name].items())]
+        person_insurer_rows[name] = [r for r in rows if any(D(r[k]) != 0 for k in ("지급 시책", "환수 시책", "추가 자체산출", "최종 시책")) or r["지급 계약 건수"] or r["환수 계약 건수"]]
+        person_insurer_rows[name].sort(key=lambda r: (D(r["최종 시책"]), r["보험사"]), reverse=True)
+    nav_title_row = row_no + 3
+    nav_line_count = (len(active_names) - 1) // 7 + 1 if active_names else 0
+    first_block_row = nav_title_row + nav_line_count + 4
+    block_rows: dict[str, int] = {}
+    cursor = first_block_row
+    for name in active_names:
+        block_rows[name] = cursor
+        cursor += len(person_insurer_rows[name]) + 6
+    add_person_navigation(ws, active_names, nav_title_row, block_rows)
+    row_no = first_block_row
+    for name in active_names:
+        personal_final = sum((D(r["최종 시책"]) for r in person_insurer_rows[name]), Decimal("0"))
+        ws.merge_cells(start_row=row_no, start_column=1, end_row=row_no, end_column=8)
+        ws.cell(row_no, 1, f"{name} · 보험사별 최종 합계 {money(personal_final)} · 랩포탈ID {identifier(person_metrics(result, name)['랩포탈ID'])}")
+        ws.cell(row_no, 1).font, ws.cell(row_no, 1).fill = section_font, blue_fill
+        ws.cell(row_no, 1).alignment, ws.cell(row_no, 1).border = Alignment(horizontal="left", vertical="center"), border
+        row_no += 1
+        for col, header in enumerate(person_headers, 1):
+            ws.cell(row_no, col, header)
+        style_header(ws, row_no, 1, len(person_headers))
+        data_start = row_no + 1
+        rows = person_insurer_rows[name]
+        for record in rows:
+            row_no += 1
+            for col, header in enumerate(person_headers, 1):
+                ws.cell(row_no, col, value_out(record[header]))
+        style_body(ws, data_start, row_no, person_headers)
+        row_no += 1
+        ws.cell(row_no, 1, "소계")
+        ws.cell(row_no, 3, sum(r["지급 계약 건수"] for r in rows))
+        ws.cell(row_no, 4, sum(r["환수 계약 건수"] for r in rows))
+        for col, key in enumerate(("지급 시책", "환수 시책", "추가 자체산출", "최종 시책"), 5):
+            value = sum((D(r[key]) for r in rows), Decimal("0"))
+            ws.cell(row_no, col, value_out(value))
+            set_money_format(ws.cell(row_no, col), value)
+        for cell in ws[row_no][:8]:
+            cell.fill, cell.font, cell.border, cell.alignment = gray_fill, Font(name="NanumGothic", size=11.5, bold=True, color=NAVY), row_border, Alignment(horizontal="center")
+        ws.row_dimensions[row_no].height = 28
+        row_no += 4
+
+    for summary_row in range(header_row + 1, header_row + len(metrics) + 1):
+        name = wb["전체 지급요약"].cell(summary_row, 1).value
+        if name in block_rows:
+            name_cell = wb["전체 지급요약"].cell(summary_row, 1)
+            internal_link(name_cell, f"'보험사별 최종요약'!A{block_rows[name] + 6}")
+            name_cell.border = row_border
+            name_cell.fill = pale_blue_fill if summary_row % 2 == 0 else PatternFill("solid", fgColor=WHITE)
+            name_cell.alignment = Alignment(horizontal="center", vertical="center")
+    for col, width in enumerate([12, 19, 16, 16, 18, 18, 18, 18, 16], 1):
+        ws.column_dimensions[get_column_letter(col)].width = width
+    prepare(ws, "C5")
+
+    # 6. 실제 확인 항목이 있을 때만 생성
+    if result.warnings:
+        ws = wb.create_sheet("확인 필요")
+        ws.merge_cells("A1:E1")
+        ws["A1"] = "확인 필요 항목"
+        ws["A1"].font, ws["A1"].fill, ws["A1"].alignment = title_font, amber_fill, Alignment(horizontal="center")
+        warning_headers = ["설계사", "구분", "보험사", "내용", "차이"]
+        for col, header in enumerate(warning_headers, 1): ws.cell(3, col, header)
+        style_header(ws, 3, 1, 5)
+        for row_no, warning in enumerate(result.warnings, 4):
+            for col, header in enumerate(warning_headers, 1): ws.cell(row_no, col, value_out(warning.get(header, "")))
+        style_body(ws, 4, ws.max_row, warning_headers)
+        for row in ws.iter_rows(min_row=4):
+            for cell in row: cell.fill = amber_fill
+        add_table(ws, "TWarnings", f"A3:E{ws.max_row}")
+        for col, width in enumerate([12, 18, 18, 52, 16], 1): ws.column_dimensions[get_column_letter(col)].width = width
+        prepare(ws, "A4")
+
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()
