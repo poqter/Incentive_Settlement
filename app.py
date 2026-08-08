@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import re
 import zipfile
 from collections import defaultdict
@@ -764,6 +765,13 @@ def export_individual_pdfs_zip(result: AnalysisResult) -> bytes:
 def display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     shown = df.copy()
     for col in shown.columns:
+        shown[col] = shown[col].map(
+            lambda v: "" if v is None or str(v).strip().lower() in ("nan", "none", "nat") else v
+        )
+        if col == "증권번호":
+            shown[col] = shown[col].map(
+                lambda v: re.sub(r"\.0+$", "", str(v).strip()) if v != "" else ""
+            )
         if col.endswith("건수"):
             shown[col] = shown[col].map(lambda v: f"{v}건")
         elif col == "시상률":
@@ -793,11 +801,13 @@ def centered_styler(df: pd.DataFrame, refund_mask=None):
     return styler
 
 
-def render_centered_table(st, df: pd.DataFrame, refund_mask=None, min_width: int = 760) -> None:
+def render_centered_table(st, df: pd.DataFrame, refund_mask=None, min_width: int = 760, max_height: int | None = None) -> None:
     """모든 셀을 가운데 정렬한 전체 길이 표를 가로 스크롤 형태로 표시합니다."""
     styler = centered_styler(df, refund_mask).format(escape="html").hide(axis="index")
+    scroll_class = " is-scrollable" if max_height else ""
+    height_style = f";--table-max-height:{max_height}px" if max_height else ""
     st.markdown(
-        f'<div class="hw-table-wrap" style="--table-min-width:{min_width}px">{styler.to_html()}</div>',
+        f'<div class="hw-table-wrap{scroll_class}" style="--table-min-width:{min_width}px{height_style}">{styler.to_html()}</div>',
         unsafe_allow_html=True,
     )
 
@@ -913,6 +923,7 @@ def render_app():
         width:100%;overflow-x:auto;margin:.35rem 0 1rem;border:1px solid #d8dee8;
         border-radius:11px;background:#fff;box-shadow:0 2px 8px rgba(23,42,70,.035);
     }}
+    .hw-table-wrap.is-scrollable {{max-height:var(--table-max-height);overflow:auto}}
     .hw-table-wrap table {{
         width:100%;min-width:var(--table-min-width);border-collapse:collapse;
         font-size:.86rem;color:#172a46;
@@ -923,6 +934,10 @@ def render_app():
         white-space:normal;
     }}
     .hw-table-wrap th {{background:#eaf1fa;color:#415b7a;font-weight:700}}
+    .hw-table-wrap thead th {{
+        position:sticky;top:0;z-index:3;
+        box-shadow:0 1px 0 #cbd5e1,0 3px 7px rgba(23,42,70,.07);
+    }}
     .hw-table-wrap tbody tr:last-child td {{border-bottom:1px solid #d8dee8 !important}}
     .hw-table-wrap table {{margin-bottom:0 !important}}
     .hw-table-wrap th:last-child,.hw-table-wrap td:last-child {{border-right:0}}
@@ -956,8 +971,14 @@ def render_app():
     if not uploaded:
         st.info("XLSX 파일을 업로드해 주세요.")
         return
+    uploaded_bytes = uploaded.getvalue()
+    file_digest = hashlib.sha256(uploaded_bytes).hexdigest()
     try:
-        result = analyze_workbook(uploaded.getvalue(), uploaded.name)
+        if st.session_state.get("_analysis_file_digest") != file_digest:
+            st.session_state["_analysis_result"] = analyze_workbook(uploaded_bytes, uploaded.name)
+            st.session_state["_analysis_file_digest"] = file_digest
+            st.session_state["_export_cache"] = {}
+        result = st.session_state["_analysis_result"]
     except Exception as exc:
         st.error(f"파일을 분석하지 못했습니다: {exc}")
         return
@@ -967,6 +988,22 @@ def render_app():
             if not result.payment_month: result.payment_month = st.text_input("지급월 (선택)", placeholder="예: 2026년 06월")
         with c2:
             if not result.performance_month: result.performance_month = st.text_input("업적월 (선택)", placeholder="예: 2026년 05월")
+
+    def cached_output(kind: str, name: str = "") -> bytes:
+        cache = st.session_state.setdefault("_export_cache", {})
+        cache_key = (file_digest, result.payment_month, result.performance_month, kind, name)
+        if cache_key not in cache:
+            if kind == "combined_pdf":
+                cache[cache_key] = export_pdf(result)
+            elif kind == "individual_zip":
+                cache[cache_key] = export_individual_pdfs_zip(result)
+            elif kind == "excel":
+                cache[cache_key] = export_excel(result)
+            elif kind == "person_pdf":
+                cache[cache_key] = export_pdf(result, name)
+            else:
+                raise ValueError(f"알 수 없는 출력 형식: {kind}")
+        return cache[cache_key]
     option_map = {"전체": "전체", "허탁 · 지점장": "허탁"}
     option_map.update({name: name for name in NAV_NAMES if name != LEADER})
     with st.sidebar:
@@ -998,22 +1035,22 @@ def render_app():
         else:
             mapping = {"총 시책 높은 순":("총 시책",False),"총 시책 낮은 순":("총 시책",True)}
             col, asc = mapping[sort]; df = df.sort_values(col, ascending=asc, kind="stable")
-        render_centered_table(st, display_dataframe(df), min_width=1220)
+        render_centered_table(st, display_dataframe(df), min_width=1220, max_height=680)
         period_file = re.sub(r"\s+", "", result.payment_month) if result.payment_month else ""
         st.markdown("### 결과 다운로드")
         c1, c2, c3 = st.columns(3)
         with c1:
             with st.container(border=True):
                 st.markdown('<div class="download-card-head"><div class="download-card-title">📘 통합 정산서 PDF</div><div class="download-card-desc">전체 지급 요약과 모든 개인 정산서를<br>하나의 PDF로 내려받습니다.</div></div>', unsafe_allow_html=True)
-                st.download_button("📥 통합 PDF 다운로드", export_pdf(result), file_name=f"드림지점_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf", mime="application/pdf", use_container_width=True)
+                st.download_button("📥 통합 PDF 다운로드", cached_output("combined_pdf"), file_name=f"드림지점_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf", mime="application/pdf", use_container_width=True)
         with c2:
             with st.container(border=True):
                 st.markdown('<div class="download-card-head"><div class="download-card-title">📦 설계사별 PDF ZIP</div><div class="download-card-desc">내역이 있는 설계사의 정산서를<br>개별 PDF로 묶어 내려받습니다.</div></div>', unsafe_allow_html=True)
-                st.download_button("📥 개별 PDF ZIP 다운로드", export_individual_pdfs_zip(result), file_name=f"드림지점_설계사별_개인시책정산서_{period_file+'지급' if period_file else ''}.zip", mime="application/zip", use_container_width=True)
+                st.download_button("📥 개별 PDF ZIP 다운로드", cached_output("individual_zip"), file_name=f"드림지점_설계사별_개인시책정산서_{period_file+'지급' if period_file else ''}.zip", mime="application/zip", use_container_width=True)
         with c3:
             with st.container(border=True):
                 st.markdown('<div class="download-card-head"><div class="download-card-title">📊 지급 요약 Excel</div><div class="download-card-desc">전체 요약과 계약 상세내역,<br>확인이 필요한 검증 결과를 포함합니다.</div></div>', unsafe_allow_html=True)
-                st.download_button("📥 요약 Excel 다운로드", export_excel(result), file_name=f"드림지점_개인시책지급요약_{period_file+'지급' if period_file else ''}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                st.download_button("📥 요약 Excel 다운로드", cached_output("excel"), file_name=f"드림지점_개인시책지급요약_{period_file+'지급' if period_file else ''}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     else:
         st.markdown(f"### {selected} 개인 정산")
         if not result.has_activity(selected):
@@ -1041,9 +1078,9 @@ def render_app():
                 refund_mask = ddf["지급/환수 구분"].eq("환수")
                 screen_columns = ["보험사","지급/환수 구분","증권번호","계약자명","계약일","시상내용","인정보험료","시상률","지급기준액","상품명","비고"]
                 shown = display_dataframe(ddf[screen_columns]).rename(columns={"지급/환수 구분":"지급/환수"})
-                render_centered_table(st, shown, refund_mask, min_width=1380)
+                render_centered_table(st, shown, refund_mask, min_width=1380, max_height=680)
         period_file=re.sub(r"\s+","",result.payment_month) if result.payment_month else ""
-        st.download_button(f"{selected} 개인정산서 PDF",export_pdf(result,selected),file_name=f"{selected}_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf",mime="application/pdf",use_container_width=True)
+        st.download_button(f"{selected} 개인정산서 PDF",cached_output("person_pdf", selected),file_name=f"{selected}_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf",mime="application/pdf",use_container_width=True)
 
 
 if __name__ == "__main__":
