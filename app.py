@@ -603,7 +603,6 @@ def export_excel(result: AnalysisResult) -> bytes:
                 ws.cell(header_at, col, header)
             style_header(ws, header_at, 1, len(headers))
             for values in records_by_name[name]:
-                ws.append([]) if ws.max_row < header_at else None
                 row_no = ws.max_row + 1
                 for col, value in enumerate(values, 1):
                     ws.cell(row_no, col, value_out(value))
