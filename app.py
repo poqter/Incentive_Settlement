@@ -664,18 +664,38 @@ def render_app():
     [data-testid="stToolbar"] {{background:transparent !important}}
     .block-container {{padding-top:1.5rem;max-width:1500px}}
     [data-testid="stSidebar"] {{
-        background:linear-gradient(180deg,#172a46 0%,#1d3557 100%);
+        position:relative;
+        background:
+            radial-gradient(circle at 14% 7%,rgba(83,145,224,.30) 0%,rgba(83,145,224,0) 29%),
+            radial-gradient(circle at 92% 88%,rgba(42,91,154,.28) 0%,rgba(42,91,154,0) 36%),
+            linear-gradient(155deg,#0d1d32 0%,#172f50 48%,#0f2038 100%);
+        border-right:1px solid rgba(157,190,229,.18);
+        box-shadow:10px 0 30px rgba(15,31,53,.10);
+    }}
+    [data-testid="stSidebar"]::before {{
+        content:"";position:absolute;inset:0;pointer-events:none;opacity:.20;
+        background-image:radial-gradient(rgba(255,255,255,.18) .65px,transparent .65px);
+        background-size:15px 15px;
+        mask-image:linear-gradient(to bottom,black,transparent 82%);
     }}
     [data-testid="stSidebar"] * {{color:#fff}}
-    [data-testid="stSidebarContent"] {{padding-top:1.25rem}}
+    [data-testid="stSidebarContent"] {{position:relative;z-index:1;padding-top:1.25rem}}
     .side-brand {{
-        color:#7fb2f0 !important;font-size:.72rem;font-weight:800;
-        letter-spacing:.09em;margin-bottom:.2rem;
+        color:#8fbeef !important;font-size:.70rem;font-weight:800;
+        letter-spacing:.11em;margin:0 .15rem .38rem;
     }}
     .side-title {{
-        color:#fff !important;font-size:1.18rem;font-weight:800;
-        padding-bottom:1rem;border-bottom:1px solid rgba(255,255,255,.12);
-        margin-bottom:1rem;
+        position:relative;color:#fff !important;font-size:1.12rem;font-weight:800;
+        padding:.82rem .92rem .82rem 1.05rem;margin-bottom:1.1rem;border-radius:12px;
+        border:1px solid rgba(170,204,242,.18);
+        background:linear-gradient(135deg,rgba(255,255,255,.11),rgba(255,255,255,.035));
+        box-shadow:0 12px 28px rgba(3,13,27,.18),inset 0 1px 0 rgba(255,255,255,.08);
+        backdrop-filter:blur(8px);
+    }}
+    .side-title::before {{
+        content:"";position:absolute;left:.52rem;top:.72rem;bottom:.72rem;width:3px;
+        border-radius:3px;background:linear-gradient(180deg,#7fb8f4,#2f67b1);
+        box-shadow:0 0 12px rgba(104,168,235,.45);
     }}
     .side-section {{
         color:#aebfd5 !important;font-size:.76rem;font-weight:700;
@@ -688,11 +708,13 @@ def render_app():
     }}
     [data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {{display:none}}
     [data-testid="stSidebar"] [role="radiogroup"] label:hover {{
-        background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.08);
+        background:linear-gradient(90deg,rgba(255,255,255,.10),rgba(255,255,255,.045));
+        border-color:rgba(181,210,242,.13);
     }}
     [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
-        background:#2f67b1;border-color:#5f91d0;
-        box-shadow:0 4px 12px rgba(0,0,0,.14);
+        background:linear-gradient(100deg,#3978c5 0%,#285e9f 100%);
+        border-color:rgba(157,201,246,.48);
+        box-shadow:0 7px 18px rgba(4,18,36,.25),inset 0 1px 0 rgba(255,255,255,.14);
     }}
     [data-testid="stSidebar"] [role="radiogroup"] label p {{
         margin:0;font-size:.88rem;font-weight:600;
