@@ -708,6 +708,8 @@ def export_excel(result: AnalysisResult) -> bytes:
             ws.cell(row_no, col, value_out(value))
     style_body(ws, header_row + 1, header_row + len(metrics), summary_headers)
     for row_no in range(header_row + 1, header_row + len(metrics) + 1):
+        ws.cell(row_no, 2).number_format = '0"건"'
+        ws.cell(row_no, 4).number_format = '0"건"'
         if ws.cell(row_no, 13).value:
             ws.cell(row_no, 13).fill = amber_fill
     total_row = header_row + len(metrics) + 1
@@ -720,20 +722,15 @@ def export_excel(result: AnalysisResult) -> bytes:
         if col in (3, 5, 6, 7, 8, 9, 10, 11, 12):
             set_money_format(cell, value)
             cell.font = total_font
+        elif col in (2, 4):
+            cell.number_format = '0"건"'
     ws.row_dimensions[total_row].height = 28
     add_table(ws, "TOverallSummary", f"A{header_row}:M{header_row + len(metrics)}")
     widths = [12, 11, 17, 11, 17, 15, 15, 17, 15, 13, 13, 15, 12, 12]
     for i, width in enumerate(widths, 1): ws.column_dimensions[get_column_letter(i)].width = width
     prepare(ws, f"A{header_row + 1}")
 
-    # 2. 계약별 합산 요약 — 같은 시트 안에서 모집인별 독립 표
-    contract_headers = ["자료구분", "모집인", "랩포탈ID", "보험사", "지급/환수", "증권번호", "계약자명", "계약일", "인정보험료", "시상 내역 수", "시상내용", "지급기준액 합계", "상품명"]
-    contract_by_name: dict[str, list[list[Any]]] = defaultdict(list)
-    for record in grouped_contracts:
-        contract_by_name[record["모집인"]].append([value_out(record[h]) for h in contract_headers])
-    person_block_sheet("계약별 합산 요약", contract_headers, contract_by_name, [12, 11, 16, 15, 12, 20, 13, 13, 16, 12, 36, 18, 50], refund_col=5, freeze_col="E")
-
-    # 3. 통합 계약상세 — 원본값을 유지하고 모집인별 독립 표
+    # 2. 통합 계약상세 — 원본값을 유지하고 모집인별 독립 표
     detail_headers = ["자료구분", "모집인", "랩포탈ID", "보험사", "지급/환수 구분", "증권번호", "계약자명", "계약일", "시상내용", "인정보험료", "시상률", "지급기준액", "상품명", "비고"]
     detail_by_name: dict[str, list[list[Any]]] = defaultdict(list)
     for row in details:
@@ -748,7 +745,7 @@ def export_excel(result: AnalysisResult) -> bytes:
             ws.cell(row_no, 11).number_format = "0.########"
             set_money_format(ws.cell(row_no, 12), ws.cell(row_no, 12).value)
 
-    # 4. 환수 관리 — 환수 계약이 있을 때만 생성
+    # 3. 환수 관리 — 환수 계약이 있을 때만 생성
     refund_map: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for record in (r for r in grouped_contracts if r["지급/환수"] == "환수"):
         key = (record["모집인"], record["랩포탈ID"], record["보험사 정규명"], record["증권번호"] or f"{record['자료구분']}:{record['계약일']}:{record['계약자명']}")
@@ -787,7 +784,7 @@ def export_excel(result: AnalysisResult) -> bytes:
             ws.cell(subtotal_row, 8).font = Font(name="NanumGothic", size=11.5, bold=True, color=RED if refund_total < 0 else NAVY)
             ws.row_dimensions[subtotal_row].height = 28
 
-    # 5. 보험사별 최종요약 — 지점 전체 합계 + 설계사별 보험사 합계
+    # 4. 보험사별 최종요약 — 지점 전체 합계 + 설계사별 보험사 합계
     def blank_insurer_metric() -> dict[str, Any]:
         return {
             "지급 계약": set(), "환수 계약": set(), "지급 시책": Decimal("0"),
@@ -805,7 +802,7 @@ def export_excel(result: AnalysisResult) -> bytes:
             key = (section, row.get("보험사") or raw_insurer(row))
             metric = insurer_by_name[name][key]
             status = row.get("지급/환수 구분")
-            policy = identifier(row.get("증권번호")) or f"{section}:{row.get('원본행')}"
+            policy = identifier(row.get("증권번호")) or "__증권번호없음__"
             if status == "환수":
                 metric["환수 계약"].add(policy)
                 metric["환수 시책"] += D(row.get("지급기준액"))
@@ -863,6 +860,24 @@ def export_excel(result: AnalysisResult) -> bytes:
     style_body(ws, 5, row_no, final_headers)
     if branch_rows:
         add_table(ws, "TInsurerFinalSummary", f"A4:I{row_no}")
+        row_no += 1
+        ws.cell(row_no, 1, "소계")
+        ws.cell(row_no, 3, sum(r["지급 계약 건수"] for r in branch_rows))
+        ws.cell(row_no, 4, sum(r["환수 계약 건수"] for r in branch_rows))
+        for col, key in enumerate(("지급 시책", "환수 시책", "추가 자체산출", "최종 시책"), 5):
+            value = sum((D(r[key]) for r in branch_rows), Decimal("0"))
+            ws.cell(row_no, col, value_out(value))
+            set_money_format(ws.cell(row_no, col), value)
+        ws.cell(row_no, 9, len(active_names))
+        for cell in ws[row_no][:len(final_headers)]:
+            cell.fill = gray_fill
+            cell.font = Font(name="NanumGothic", size=11.5, bold=True, color=NAVY)
+            cell.border = row_border
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for col in range(5, 9):
+            value = D(ws.cell(row_no, col).value)
+            ws.cell(row_no, col).font = Font(name="NanumGothic", size=11.5, bold=True, color=RED if value < 0 else NAVY)
+        ws.row_dimensions[row_no].height = 28
 
     person_insurer_rows: dict[str, list[dict[str, Any]]] = {}
     for name in active_names:
@@ -921,7 +936,7 @@ def export_excel(result: AnalysisResult) -> bytes:
         ws.column_dimensions[get_column_letter(col)].width = width
     prepare(ws, "C5")
 
-    # 6. 실제 확인 항목이 있을 때만 생성
+    # 5. 실제 확인 항목이 있을 때만 생성
     if result.warnings:
         ws = wb.create_sheet("확인 필요")
         ws.merge_cells("A1:E1")
