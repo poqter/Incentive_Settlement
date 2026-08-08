@@ -658,6 +658,10 @@ def render_app():
     st.markdown(f"""
     <style>
     .stApp {{background:#f6f8fb;color:#172a46}}
+    header[data-testid="stHeader"],
+    [data-testid="stHeader"],
+    .stAppHeader {{background:#f6f8fb !important}}
+    [data-testid="stToolbar"] {{background:transparent !important}}
     .block-container {{padding-top:1.5rem;max-width:1500px}}
     [data-testid="stSidebar"] {{background:#172a46}}
     [data-testid="stSidebar"] * {{color:#fff}}
@@ -669,6 +673,28 @@ def render_app():
     .metric-value {{color:#172a46;font-size:1.35rem;font-weight:800;margin-top:5px}}
     .warning-box {{background:#fff1f1;border-left:4px solid #b42318;padding:12px 14px;border-radius:8px;color:#8d1b13}}
     div[data-testid="stDataFrame"] {{background:#fff;border-radius:12px}}
+    [data-testid="stFileUploader"] section,
+    [data-testid="stFileUploaderDropzone"] {{
+        background:#ffffff !important;
+        border:1px dashed #b7c6da !important;
+        border-radius:12px !important;
+        color:#172a46 !important;
+    }}
+    [data-testid="stFileUploaderDropzone"] *,
+    [data-testid="stFileUploader"] section * {{
+        color:#172a46 !important;
+    }}
+    [data-testid="stFileUploaderDropzone"] button,
+    [data-testid="stFileUploader"] section button {{
+        background:#f8fafc !important;
+        color:#172a46 !important;
+        border:1px solid #b7c6da !important;
+    }}
+    [data-testid="stFileUploaderDropzone"] button:hover,
+    [data-testid="stFileUploader"] section button:hover {{
+        background:#eaf1fa !important;
+        border-color:#2f67b1 !important;
+    }}
     </style>""", unsafe_allow_html=True)
     st.markdown('<div class="brand">화랑 WORKSPACE</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="title">{APP_TITLE}</div>', unsafe_allow_html=True)
