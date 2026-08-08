@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import re
+import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -78,6 +79,63 @@ def normalize_name(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or ""))
 
 
+def summarize_product_name(value: Any, insurer: Any = "") -> str:
+    """화면·PDF용 상품명을 핵심 명칭 중심으로 간결하게 정리합니다."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    removable_keywords = (
+        "해약환급금", "해지환급금", "무해약환급금", "무해약", "보증비용", "간편가입",
+        "간편심사", "일반심사", "간편고지", "일반가입형", "납입면제",
+        "세만기", "연만기", "갱신형", "비갱신형", "보증형", "저해지",
+    )
+
+    def remove_option_block(match: re.Match) -> str:
+        content = match.group(1)
+        compact = re.sub(r"\s+", "", content)
+        is_revision = bool(re.fullmatch(r"(?:Hi)?\d{2,4}(?:\.\d+)*", compact, flags=re.IGNORECASE))
+        is_marker = bool(re.fullmatch(r"[무갱,·/\s]+", content))
+        return " " if any(keyword in content for keyword in removable_keywords) or is_revision or is_marker else match.group(0)
+
+    # 약관형 부가 설명은 괄호 모양과 관계없이 제거하고 상품 고유 명칭은 유지합니다.
+    for _ in range(2):
+        text = re.sub(r"\(([^()]*)\)", remove_option_block, text)
+        text = re.sub(r"\[([^\[\]]*)\]", remove_option_block, text)
+    text = re.sub(r"^(?:무\)|\(무\))\s*", "", text)
+    text = re.sub(r"\(?\s*무배당\s*\)?\d{0,4}", "", text, flags=re.IGNORECASE)
+    text = text.split("_")[0]
+    text = re.sub(r"-?\s*(?:일반|간편|통합간편)가입형\s*$", "", text)
+    text = re.sub(r"(?<=[가-힣A-Za-zⅡⅢIVX])\s*\d{4}$", "", text)
+    text = re.sub(r"\(\s*[,·/]?\s*\)|\[\s*[,·/]?\s*\]", "", text)
+    text = re.sub(r"\s*[,·/]\s*(?=$)", "", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" _-·,")
+
+    # 보험사 열에 이미 표시되는 회사명은 상품명 앞부분에서만 안전하게 생략합니다.
+    prefix_map = {
+        "ABL생명": ("ABL생명", "ABL"),
+        "DB손보": ("DB손해보험", "DB손보", "DB"),
+        "KB손해": ("KB손해보험", "KB손해", "KB"),
+        "KB생명": ("KB라이프", "KB생명", "KB"),
+        "라이나생명": ("라이나생명", "라이나"),
+        "미래에셋생명": ("미래에셋생명", "미래에셋"),
+        "삼성생명": ("삼성생명", "삼성"),
+        "삼성화재": ("삼성화재", "삼성"),
+        "신한라이프": ("신한라이프", "신한생명", "신한"),
+        "하나생명": ("하나생명", "하나"),
+        "하나손보": ("하나손해보험", "하나손보", "하나"),
+        "한화생명": ("한화생명", "한화"),
+        "한화손보": ("한화손해보험", "한화손보", "한화"),
+        "현대해상": ("현대해상",),
+        "흥국화재": ("흥국화재", "흥국", "흥Good"),
+    }
+    company = normalize_insurer(insurer)
+    for prefix in sorted(prefix_map.get(company, ()), key=len, reverse=True):
+        if re.match(rf"^{re.escape(prefix)}(?=\s|[가-힣A-Za-z0-9(])", text, flags=re.IGNORECASE):
+            text = re.sub(rf"^{re.escape(prefix)}\s*", "", text, count=1, flags=re.IGNORECASE)
+            break
+    return text
+
+
 def norm_header(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "")).strip()
 
@@ -137,6 +195,17 @@ def infer_period(texts: Iterable[str]) -> tuple[str, str]:
             if match:
                 performance = f"{int(match.group(1)):04d}년 {int(match.group(2)):02d}월"
     return payment, performance
+
+
+def additional_incentive_month(payment_month: str) -> str:
+    """지급월 기준 15차월 추가 시책의 계약 업적월(14개월 전)을 반환합니다."""
+    match = re.search(r"(20\d{2})년\s*(\d{1,2})월", str(payment_month or ""))
+    if not match:
+        return ""
+    year, month = int(match.group(1)), int(match.group(2))
+    month_index = year * 12 + (month - 1) - 14
+    target_year, target_month_index = divmod(month_index, 12)
+    return f"{target_year:04d}년 {target_month_index + 1:02d}월"
 
 
 def policy_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -383,13 +452,21 @@ def summary_dataframe(result: AnalysisResult, include_all: bool = True) -> pd.Da
 DETAIL_COLUMNS = ["모집인", "랩포탈ID", "보험사", "지급/환수 구분", "증권번호", "계약자명", "계약일", "시상내용", "인정보험료", "상품명", "시상률", "지급기준액", "비고"]
 
 
-def detail_dataframe(result: AnalysisResult, section: str, name: str | None = None) -> pd.DataFrame:
+def detail_dataframe(result: AnalysisResult, section: str, name: str | None = None, summarize_product: bool = False) -> pd.DataFrame:
     rows = result.details.get(section, [])
     if name:
         rows = [r for r in rows if r["모집인"] == name]
     data = []
     for row in rows:
-        data.append({col: (date_text(row.get(col)) if col == "계약일" else dec_out(row.get(col)) if col in ("인정보험료", "시상률", "지급기준액") else row.get(col, "")) for col in DETAIL_COLUMNS})
+        data.append({
+            col: (
+                date_text(row.get(col)) if col == "계약일"
+                else dec_out(row.get(col)) if col in ("인정보험료", "시상률", "지급기준액")
+                else summarize_product_name(row.get(col), row.get("보험사")) if col == "상품명" and summarize_product
+                else row.get(col, "")
+            )
+            for col in DETAIL_COLUMNS
+        })
     return pd.DataFrame(data, columns=DETAIL_COLUMNS)
 
 
@@ -465,17 +542,17 @@ def _pdf_fonts():
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     font_dir = Path(__file__).resolve().parent / "fonts"
-    regular = font_dir / "NanumGothicCoding-Regular.ttf"
-    bold = font_dir / "NanumGothicCoding-Bold.ttf"
+    regular = font_dir / "NanumGothic-Regular.ttf"
+    bold = font_dir / "NanumGothic-Bold.ttf"
     if not regular.exists() or not bold.exists():
-        raise FileNotFoundError("fonts 폴더에 NanumGothicCoding 글꼴 파일이 필요합니다.")
+        raise FileNotFoundError("fonts 폴더에 NanumGothic 글꼴 파일이 필요합니다.")
     try:
-        pdfmetrics.getFont("NanumGothicCoding")
+        pdfmetrics.getFont("NanumGothic")
     except KeyError:
-        pdfmetrics.registerFont(TTFont("NanumGothicCoding", str(regular)))
-        pdfmetrics.registerFont(TTFont("NanumGothicCoding-Bold", str(bold)))
-        pdfmetrics.registerFontFamily("NanumGothicCoding", normal="NanumGothicCoding", bold="NanumGothicCoding-Bold")
-    return "NanumGothicCoding", "NanumGothicCoding-Bold"
+        pdfmetrics.registerFont(TTFont("NanumGothic", str(regular)))
+        pdfmetrics.registerFont(TTFont("NanumGothic-Bold", str(bold)))
+        pdfmetrics.registerFontFamily("NanumGothic", normal="NanumGothic", bold="NanumGothic-Bold")
+    return "NanumGothic", "NanumGothic-Bold"
 
 
 def _pdf_styles():
@@ -484,15 +561,16 @@ def _pdf_styles():
     gothic, bold = _pdf_fonts()
     styles = getSampleStyleSheet()
     return {
-        "brand": ParagraphStyle("brand", parent=styles["Normal"], fontName=bold, fontSize=9, textColor=colors.HexColor(f"#{BLUE}"), leading=12),
+        "brand": ParagraphStyle("brand", parent=styles["Normal"], fontName=bold, fontSize=9.5, textColor=colors.HexColor(f"#{BLUE}"), leading=13),
         "title": ParagraphStyle("title", parent=styles["Title"], fontName=bold, fontSize=20, textColor=colors.HexColor(f"#{NAVY}"), leading=25, spaceAfter=4),
-        "sub": ParagraphStyle("sub", parent=styles["Normal"], fontName=gothic, fontSize=9, textColor=colors.HexColor(f"#{GRAY}"), leading=13),
-        "section": ParagraphStyle("section", parent=styles["Heading2"], fontName=bold, fontSize=12, textColor=colors.HexColor(f"#{NAVY}"), leading=16, spaceBefore=10, spaceAfter=5),
-        "body": ParagraphStyle("body", parent=styles["Normal"], fontName=gothic, fontSize=7.2, leading=10),
-        "small": ParagraphStyle("small", parent=styles["Normal"], fontName=gothic, fontSize=6.5, leading=8),
-        "metric": ParagraphStyle("metric", parent=styles["Normal"], fontName=bold, fontSize=17, leading=21, alignment=1, textColor=colors.HexColor(f"#{NAVY}")),
-        "center": ParagraphStyle("center", parent=styles["Normal"], fontName=gothic, fontSize=7, leading=9, alignment=1),
-        "warning": ParagraphStyle("warning", parent=styles["Normal"], fontName=gothic, fontSize=8, leading=11, textColor=colors.HexColor(f"#{RED}")),
+        "sub": ParagraphStyle("sub", parent=styles["Normal"], fontName=bold, fontSize=11, textColor=colors.HexColor("#344054"), leading=16, spaceTop=2, alignment=1),
+        "section": ParagraphStyle("section", parent=styles["Heading2"], fontName=bold, fontSize=13, textColor=colors.HexColor(f"#{NAVY}"), leading=17, spaceBefore=11, spaceAfter=6),
+        "body": ParagraphStyle("body", parent=styles["Normal"], fontName=gothic, fontSize=7.8, leading=10.7, alignment=1),
+        "small": ParagraphStyle("small", parent=styles["Normal"], fontName=gothic, fontSize=7.4, leading=9.5, alignment=1),
+        "metric": ParagraphStyle("metric", parent=styles["Normal"], fontName=bold, fontSize=14, leading=18, alignment=1, textColor=colors.HexColor(f"#{NAVY}")),
+        "center": ParagraphStyle("center", parent=styles["Normal"], fontName=gothic, fontSize=8, leading=10.5, alignment=1),
+        "header": ParagraphStyle("header", parent=styles["Normal"], fontName=bold, fontSize=8, leading=10.5, alignment=1, textColor=colors.white),
+        "warning": ParagraphStyle("warning", parent=styles["Normal"], fontName=bold, fontSize=9, leading=12, textColor=colors.HexColor(f"#{RED}")),
     }
 
 
@@ -539,13 +617,17 @@ def _summary_pdf(result: AnalysisResult) -> bytes:
     from reportlab.platypus import SimpleDocTemplate, Spacer, Table, TableStyle
     styles = _pdf_styles(); buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=10*mm, rightMargin=10*mm, topMargin=10*mm, bottomMargin=12*mm)
-    period = " · ".join(v for v in [f"{result.payment_month} 지급" if result.payment_month else "", f"{result.performance_month} 업적" if result.performance_month else ""] if v)
+    period = " · ".join(v for v in [
+        f"{result.payment_month} 지급" if result.payment_month else "",
+        f"{result.performance_month} 업적" if result.performance_month else "",
+        "13차월 추가 시책",
+    ] if v)
     story = [_p("화랑 WORKSPACE", styles["brand"]), _p("전체 지급 요약", styles["title"]), _p(period, styles["sub"]), Spacer(1, 5*mm)]
     df = summary_dataframe(result, include_all=False)
     cols = ["이름", "지급 건수", "지급 인정보험료", "환수 건수", "환수 인정보험료", "생보 시책", "손보 시책", "추가 자체산출", "총 시책", "실지급액"]
     if "확인" in df.columns:
         cols.append("확인")
-    data = [[_p(c, styles["center"]) for c in cols]]
+    data = [[_p(c, styles["header"]) for c in cols]]
     for _, row in df.iterrows():
         vals = []
         for col in cols:
@@ -572,10 +654,14 @@ def _person_pdf(result: AnalysisResult, name: str) -> bytes:
     styles = _pdf_styles(); buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=11*mm, rightMargin=11*mm, topMargin=10*mm, bottomMargin=13*mm)
     m = person_metrics(result, name)
-    period = " · ".join(v for v in [f"{result.payment_month} 지급" if result.payment_month else "", f"{result.performance_month} 업적" if result.performance_month else ""] if v)
-    story = [_p("화랑 WORKSPACE", styles["brand"]), _p("개인시책 정산서", styles["title"]), _p(f"성명  {name}" + (f"  ·  {period}" if period else ""), styles["sub"]), Spacer(1, 4*mm)]
+    period = " · ".join(v for v in [
+        f"{result.payment_month} 지급" if result.payment_month else "",
+        f"{result.performance_month} 업적" if result.performance_month else "",
+        "13차월 추가 시책",
+    ] if v)
+    story = [_p("화랑 WORKSPACE", styles["brand"]), _p(f"{name} 개인시책 정산서", styles["title"]), _p(period, styles["sub"]), Spacer(1, 4*mm)]
     metric_data = [[_p("총 시책", styles["center"]), _p("소득세", styles["center"]), _p("주민세", styles["center"]), _p("실지급액", styles["center"])], [_p(money(m["총 시책"]), styles["metric"]), _p(money(m["소득세"]), styles["center"]), _p(money(m["주민세"]), styles["center"]), _p(money(m['실지급액']), styles["metric"])]]
-    metric = Table(metric_data, colWidths=[45*mm]*4, rowHeights=[8*mm, 17*mm])
+    metric = Table(metric_data, colWidths=[45*mm]*4, rowHeights=[8*mm, 14*mm])
     metric.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor(f"#{LIGHT_BLUE}")),("BACKGROUND",(3,1),(3,1),colors.HexColor("#DCEAFE")),("GRID",(0,0),(-1,-1),.5,colors.HexColor("#B7C6DA")),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
     story.append(metric)
     person_warnings = [w for w in result.warnings if w.get("설계사") == name]
@@ -583,7 +669,7 @@ def _person_pdf(result: AnalysisResult, name: str) -> bytes:
         story.append(Spacer(1, 2*mm)); story.append(_p("확인 필요: " + " / ".join(f"{w['보험사']+' ' if w['보험사'] else ''}{w['내용']} 차이 {money(w['차이'])}" for w in person_warnings), styles["warning"]))
 
     story += [_p("정산 요약", styles["section"])]
-    summary_data = [[_p(v, styles["center"]) for v in ["구분","지급 건수","지급 인정보험료","환수 건수","환수 인정보험료","시책 금액"]]]
+    summary_data = [[_p(v, styles["header"]) for v in ["구분","지급 건수","지급 인정보험료","환수 건수","환수 인정보험료","시책 금액"]]]
     for section in ("생보", "손보"):
         rows = result.person_rows(name, section)
         paid = unique_contracts(rows, "지급"); refund = unique_contracts(rows, "환수")
@@ -599,7 +685,7 @@ def _person_pdf(result: AnalysisResult, name: str) -> bytes:
         story.append(_p("보험사별 원본 지급·환수", styles["section"]))
         has_diff = any(r["차이"] != 0 for r in companies)
         headers = ["구분","보험사","원본 금액"] + (["상세 합계","차이"] if has_diff else [])
-        data = [[_p(v, styles["center"]) for v in headers]]
+        data = [[_p(v, styles["header"]) for v in headers]]
         for row in companies:
             vals = [row["구분"], row["보험사"], money(row["원본 금액"])]
             if has_diff: vals += [money(row["상세 최종 합계"]), money(row["차이"]) if row["차이"] != 0 else ""]
@@ -612,14 +698,19 @@ def _person_pdf(result: AnalysisResult, name: str) -> bytes:
         rows = result.person_rows(name, section)
         if not rows: continue
         story.append(_p(f"{section} 상세내역", styles["section"]))
-        headers = ["보험사","지급/환수","증권번호","계약자명","계약일","인정보험료","시상률","지급기준액","상품명"]
-        data = [[_p(v, styles["small"]) for v in headers]]
+        headers = ["보험사","계약자명","계약일","시상내용","인정보험료","지급기준액","상품명"]
+        data = [[_p(v, styles["header"]) for v in headers]]
         refund_indexes = []
         for i, row in enumerate(rows, 1):
-            vals = [row["보험사"], row["지급/환수 구분"], row.get("증권번호", ""), row.get("계약자명", ""), date_text(row.get("계약일")), money(row["인정보험료"]), format(row["시상률"], "f").rstrip("0").rstrip("."), money(row["지급기준액"]), row.get("상품명", "")]
-            data.append([_p(v, styles["small"] if j != 8 else styles["body"]) for j,v in enumerate(vals)])
+            vals = [
+                row["보험사"], row.get("계약자명", ""), date_text(row.get("계약일")),
+                row.get("시상내용", ""), money(row["인정보험료"]),
+                money(row["지급기준액"]),
+                summarize_product_name(row.get("상품명", ""), row.get("보험사", "")),
+            ]
+            data.append([_p(v, styles["body"] if j in (3, 6) else styles["small"]) for j,v in enumerate(vals)])
             if row["지급/환수 구분"] == "환수": refund_indexes.append(i)
-        widths = [18,14,24,18,19,22,14,23,32]
+        widths = [20,18,20,39,23,24,36]
         table = Table(data, colWidths=[w*mm for w in widths], repeatRows=1)
         cmds = [("BACKGROUND",(0,0),(-1,0),colors.HexColor(f"#{NAVY}")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.3,colors.HexColor("#D0D5DD")),("VALIGN",(0,0),(-1,-1),"MIDDLE"),("TOPPADDING",(0,0),(-1,-1),3),("BOTTOMPADDING",(0,0),(-1,-1),3)]
         for idx in refund_indexes: cmds.append(("BACKGROUND",(0,idx),(-1,idx),colors.HexColor(f"#{LIGHT_RED}")))
@@ -642,6 +733,18 @@ def export_pdf(result: AnalysisResult, name: str | None = None) -> bytes:
     out = io.BytesIO(); writer.write(out); return out.getvalue()
 
 
+def export_individual_pdfs_zip(result: AnalysisResult) -> bytes:
+    """정산 내역이 있는 설계사의 개인 PDF를 각각 생성해 ZIP으로 묶습니다."""
+    buffer = io.BytesIO()
+    period_file = re.sub(r"\s+", "", result.payment_month) if result.payment_month else ""
+    suffix = f"_{period_file}지급" if period_file else ""
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in NAV_NAMES:
+            if result.has_activity(name):
+                archive.writestr(f"{name}_개인시책정산서{suffix}.pdf", _person_pdf(result, name))
+    return buffer.getvalue()
+
+
 def display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     shown = df.copy()
     for col in shown.columns:
@@ -650,6 +753,50 @@ def display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         elif any(token in col for token in ("보험료", "시책", "실지급액", "세", "금액", "합계", "차이")):
             shown[col] = shown[col].map(money)
     return shown
+
+
+def centered_styler(df: pd.DataFrame, refund_mask=None):
+    """Streamlit 데이터 표의 제목과 본문을 모두 가운데 정렬합니다."""
+    styler = (
+        df.style
+        .set_properties(**{"text-align": "center", "vertical-align": "middle"})
+        .set_table_styles([
+            {"selector": "th", "props": [("text-align", "center"), ("vertical-align", "middle")]},
+        ])
+    )
+    if refund_mask is not None:
+        mask = pd.Series(refund_mask, index=df.index).fillna(False).astype(bool)
+        styler = styler.apply(
+            lambda row: ["background-color:#FDE8E7;color:#9B1C1C" if mask.loc[row.name] else "" for _ in row],
+            axis=1,
+        )
+    return styler
+
+
+def person_summary_dataframe(result: AnalysisResult, name: str) -> pd.DataFrame:
+    rows = []
+    for section in ("생보", "손보"):
+        details = result.person_rows(name, section)
+        paid = unique_contracts(details, "지급")
+        refund = unique_contracts(details, "환수")
+        rows.append({
+            "구분": section,
+            "지급 건수": f"{len(paid)}건",
+            "지급 인정보험료": money(sum((D(r["인정보험료"]) for r in paid), Decimal("0"))),
+            "환수 건수": f"{len(refund)}건",
+            "환수 인정보험료": money(sum((D(r["인정보험료"]) for r in refund), Decimal("0"))),
+            "시책 금액": money(sum((D(r["지급기준액"]) for r in details), Decimal("0"))),
+        })
+    extra = result.person_rows(name, "추가 자체산출")
+    rows.append({
+        "구분": "추가 자체산출",
+        "지급 건수": f"{len({policy_key(r) for r in extra})}건",
+        "지급 인정보험료": "중복 제외",
+        "환수 건수": "-",
+        "환수 인정보험료": "중복 제외",
+        "시책 금액": money(sum((D(r["지급기준액"]) for r in extra), Decimal("0"))),
+    })
+    return pd.DataFrame(rows)
 
 
 def render_app():
@@ -799,10 +946,18 @@ def render_app():
         else:
             mapping = {"총 시책 높은 순":("총 시책",False),"총 시책 낮은 순":("총 시책",True)}
             col, asc = mapping[sort]; df = df.sort_values(col, ascending=asc, kind="stable")
-        st.dataframe(display_dataframe(df), use_container_width=True, hide_index=True, height=720)
-        c1, c2 = st.columns(2)
+        st.dataframe(centered_styler(display_dataframe(df)), use_container_width=True, hide_index=True, height=720)
         period_file = re.sub(r"\s+", "", result.payment_month) if result.payment_month else ""
-        c1.download_button("전체 개인정산서 일괄 PDF", export_pdf(result), file_name=f"화랑사업부_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf", mime="application/pdf", use_container_width=True)
+        pdf_mode = st.radio(
+            "전체 정산서 다운로드 방식",
+            ["하나의 통합 PDF", "설계사별 개별 PDF ZIP"],
+            horizontal=True,
+        )
+        c1, c2 = st.columns(2)
+        if pdf_mode == "하나의 통합 PDF":
+            c1.download_button("전체 개인정산서 통합 PDF", export_pdf(result), file_name=f"화랑사업부_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf", mime="application/pdf", use_container_width=True)
+        else:
+            c1.download_button("설계사별 개인정산서 ZIP", export_individual_pdfs_zip(result), file_name=f"화랑사업부_설계사별_개인시책정산서_{period_file+'지급' if period_file else ''}.zip", mime="application/zip", use_container_width=True)
         c2.download_button("전체 지급요약 엑셀", export_excel(result), file_name=f"화랑사업부_개인시책지급요약_{period_file+'지급' if period_file else ''}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     else:
         m = person_metrics(result, selected)
@@ -812,17 +967,23 @@ def render_app():
         for col,(label,value) in zip(cols,cards): col.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>',unsafe_allow_html=True)
         personal_warnings=[w for w in result.warnings if w.get("설계사")==selected]
         if personal_warnings: st.markdown('<div class="warning-box">'+'<br>'.join(f"{w['보험사']+' · ' if w['보험사'] else ''}{w['내용']} 차이 {money(w['차이'])}" for w in personal_warnings)+'</div>',unsafe_allow_html=True)
+        st.markdown("#### 정산 요약")
+        st.dataframe(centered_styler(person_summary_dataframe(result, selected)), use_container_width=True, hide_index=True)
         companies=company_rows(result,selected)
         if companies:
             st.markdown("#### 보험사별 원본 지급·환수")
             cdf=pd.DataFrame(companies)
             if not any(cdf["차이"].map(D)!=0): cdf=cdf[["구분","보험사","원본 금액"]]
-            st.dataframe(display_dataframe(cdf),use_container_width=True,hide_index=True)
+            st.dataframe(centered_styler(display_dataframe(cdf)),use_container_width=True,hide_index=True)
         for section in ("생보","손보","추가 자체산출"):
             st.markdown(f"#### {section} 상세내역")
-            ddf=detail_dataframe(result,section,selected)
+            ddf=detail_dataframe(result,section,selected,summarize_product=False)
             if ddf.empty: st.caption(f"{section} 내역이 없습니다.")
-            else: st.dataframe(display_dataframe(ddf),use_container_width=True,hide_index=True,height=min(700,42*(len(ddf)+1)))
+            else:
+                refund_mask = ddf["지급/환수 구분"].eq("환수")
+                screen_columns = ["보험사","지급/환수 구분","증권번호","계약자명","계약일","시상내용","인정보험료","시상률","지급기준액","상품명","비고"]
+                shown = display_dataframe(ddf[screen_columns]).rename(columns={"지급/환수 구분":"지급/환수"})
+                st.dataframe(centered_styler(shown, refund_mask),use_container_width=True,hide_index=True,height=min(700,42*(len(ddf)+1)))
         if result.has_activity(selected):
             period_file=re.sub(r"\s+","",result.payment_month) if result.payment_month else ""
             st.download_button(f"{selected} 개인정산서 PDF",export_pdf(result,selected),file_name=f"{selected}_개인시책정산서_{period_file+'지급' if period_file else ''}.pdf",mime="application/pdf",use_container_width=True)
